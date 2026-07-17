@@ -1,0 +1,26 @@
+[package]
+name = "affine-cat"
+version = "0.1.0"
+edition = "2021"
+readme = "README.md"
+license = "MPL-2.0"
+rust-version = "1.80"
+description = "Category theory native to Rust's affine, monoidal reality: lawful duplication, graded functors, box-free applicatives, Moore-machine wiring, mutation-as-lens, and law-first recursion schemes (derive + Agda-mechanized driver disciplines)."
+keywords = ["category-theory", "recursion-schemes", "affine", "state-machine", "zero-cost"]
+categories = ["data-structures", "rust-patterns", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dev-dependencies]
+affine-cat-derive = { path = "derive", version = "0.1.0" }
+
+[[bench]]
+name = "dyn_fence"
+harness = false
