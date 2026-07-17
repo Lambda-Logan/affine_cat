@@ -24,3 +24,7 @@ affine-cat-derive = { path = "derive", version = "0.1.0" }
 [[bench]]
 name = "dyn_fence"
 harness = false
+
+
+[package]
+repository = "https://github.com/Lambda-Logan/affine_cat"
