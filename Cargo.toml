@@ -1,4 +1,5 @@
 [package]
+repository = "https://github.com/Lambda-Logan/affine_cat"
 name = "affine-cat"
 version = "0.1.0"
 edition = "2021"
@@ -25,6 +26,3 @@ affine-cat-derive = { path = "derive", version = "0.1.0" }
 name = "dyn_fence"
 harness = false
 
-
-[package]
-repository = "https://github.com/Lambda-Logan/affine_cat"
