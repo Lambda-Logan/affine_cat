@@ -3,7 +3,7 @@
 //! a consumer writes; a future `#[derive(Recursive)]` would delete the
 //! section marked BOILERPLATE.
 
-use affine_cat::cata::{AtAny, FoldAlg, Pair, Recursive};
+use affine_cat::cata::{at_any, pair, FoldAlg, Recursive};
 
 // ---- the consumer's IR ----
 enum Expr {
@@ -104,11 +104,11 @@ fn main() {
     assert_eq!(fold(&Eval, &(), &e), 63);
 
     // two passes, ONE traversal (banana-split):
-    let (v, s) = fold(&Pair(Eval, Show), &(), &e);
+    let (v, s) = fold(&Eval.pair(Show), &(), &e);
     println!("{s} = {v}");
 
     // weakening: the same algebras run unchanged at any environment
-    let (v2, _) = fold(&Pair(AtAny(Eval), AtAny(Show)), &"unused env", &e);
+    let (v2, _) = fold(&pair(at_any(Eval), at_any(Show)), &"unused env", &e);
     assert_eq!(v2, 63);
 
     // the erased face: a runtime-chosen pass (pass-manager shape)

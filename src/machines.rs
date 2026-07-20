@@ -67,6 +67,7 @@
 ///   design must carry that wall in its docs.
 /// * async machines: an instance of the lending question plus an effect,
 ///   not a new primitive.
+///
 /// **Object-safe** with associated types fixed (`&mut dyn Machine<In=…,
 /// Out=…>`): the trait has no generic methods. `MapMut`/`Zip`/`Visit`, by
 /// contrast, are *not* object-safe (generic method + GAT) — runtime
@@ -95,6 +96,54 @@ pub trait Machine {
     fn out(&self) -> Self::Out;
     /// Dynamics `S × A -> S`.
     fn update(&mut self, i: Self::In);
+
+    // --- Provided wiring methods (the `Iterator` form: on the trait,
+    // `where Self: Sized`, so `dyn Machine<In = _, Out = _>` is
+    // unaffected). Building is lazy; nothing steps until `update`. ---
+
+    /// Sequential wire: `self`'s readout feeds `n`'s update — build
+    /// [`Pipe`]. Chains left-to-right: `a.pipe(b).pipe(c)`.
+    fn pipe<N: Machine<In = Self::Out>>(self, n: N) -> Pipe<Self, N>
+    where
+        Self: Sized,
+    {
+        Pipe(self, n)
+    }
+    /// Parallel juxtaposition (the tensor `⊗`) — build [`Par`].
+    fn par<N: Machine>(self, n: N) -> Par<Self, N>
+    where
+        Self: Sized,
+    {
+        Par(self, n)
+    }
+    /// Close the feedback wire — build [`Feedback`] (defined when
+    /// `Self::In = (I, F)` and `Self::Out = (O, F)`).
+    fn feedback(self) -> Feedback<Self>
+    where
+        Self: Sized,
+    {
+        Feedback(self)
+    }
+    /// The Moore product: both machines see every input — build
+    /// [`DuplicateToMachine`] (pays [`crate::base::Unaliased`] at use).
+    fn duplicate_to<N>(self, n: N) -> DuplicateToMachine<Self, N>
+    where
+        Self: Sized,
+    {
+        DuplicateToMachine(self, n)
+    }
+    /// Drive with a whole history and read out — the corepresentability
+    /// eliminator as a method (std's `collect` position; also the free
+    /// function [`run_history`]).
+    fn run_history<I: IntoIterator<Item = Self::In>>(&mut self, history: I) -> Self::Out
+    where
+        Self: Sized,
+    {
+        for i in history {
+            self.update(i);
+        }
+        self.out()
+    }
 }
 
 // ================================ Mealy ================================
@@ -111,6 +160,95 @@ pub trait Transducer {
     type Out;
     /// Step: consume an input, mutate state, produce an output.
     fn step(&mut self, i: Self::In) -> Self::Out;
+
+    // --- Provided wiring methods (`where Self: Sized`; `dyn Transducer`
+    // and the [`ByRef`] path are unaffected). ---
+
+    /// Mealy→Moore: readout is the previous step's output — build
+    /// [`Delay`] seeded with `initial`.
+    fn delay(self, initial: Self::Out) -> Delay<Self>
+    where
+        Self: Sized,
+    {
+        Delay {
+            m: self,
+            last: initial,
+        }
+    }
+    /// Step-and-discard sink — build [`Driven`] (an
+    /// [`crate::base::Absorb`]).
+    fn driven(self) -> Driven<Self>
+    where
+        Self: Sized,
+    {
+        Driven(self)
+    }
+    /// Contravariant input action (profunctor `lmap`) — build [`Premap`].
+    fn premap<A, F: FnMut(A) -> Self::In>(self, f: F) -> Premap<A, F, Self>
+    where
+        Self: Sized,
+    {
+        Premap(f, self, core::marker::PhantomData)
+    }
+    /// Covariant output action (profunctor `rmap`) — build [`Postmap`].
+    fn postmap<B, G: FnMut(Self::Out) -> B>(self, g: G) -> Postmap<Self, G>
+    where
+        Self: Sized,
+    {
+        Postmap(self, g)
+    }
+    /// Strong on the first component — build [`OnFirstTransducer`]. The
+    /// passenger type `C` binds at the use site.
+    fn on_first<C>(self) -> OnFirstTransducer<C, Self>
+    where
+        Self: Sized,
+    {
+        OnFirstTransducer(self, core::marker::PhantomData)
+    }
+    /// Strong on the second component — build [`OnSecondTransducer`].
+    fn on_second<C>(self) -> OnSecondTransducer<C, Self>
+    where
+        Self: Sized,
+    {
+        OnSecondTransducer(self, core::marker::PhantomData)
+    }
+    /// Choice on `Ok` — build [`MapOkTransducer`].
+    fn on_ok<E>(self) -> MapOkTransducer<E, Self>
+    where
+        Self: Sized,
+    {
+        MapOkTransducer(self, core::marker::PhantomData)
+    }
+    /// Choice on `Err` — build [`MapErrTransducer`].
+    fn on_err<O>(self) -> MapErrTransducer<O, Self>
+    where
+        Self: Sized,
+    {
+        MapErrTransducer(self, core::marker::PhantomData)
+    }
+}
+
+/// **Fanout at transducer grade** `⟨m, n⟩` — build [`DuplicateToTransducer`]:
+/// both step on a copy of every input (pays [`crate::base::Unaliased`]).
+/// A free function for the symmetric reading (the `std::iter::zip`
+/// precedent; see [`crate::base::alongside`]).
+pub fn duplicate_to_transducer<M, N>(m: M, n: N) -> DuplicateToTransducer<M, N>
+where
+    M: Transducer,
+    N: Transducer<In = M::In>,
+{
+    DuplicateToTransducer(m, n)
+}
+
+/// **Fanin** `[m, n]` at transducer grade — build
+/// [`ConsumeResultTransducer`]: case-analyse each `Result` input into one
+/// of two stateful machines. Free function, symmetric reading.
+pub fn consume_result_transducer<M, N>(m: M, n: N) -> ConsumeResultTransducer<M, N>
+where
+    M: Transducer,
+    N: Transducer<Out = M::Out>,
+{
+    ConsumeResultTransducer(m, n)
 }
 
 /// A mutable borrow of a machine is a machine — wire without moving.
@@ -157,7 +295,7 @@ impl<M: Machine> Transducer for M {
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 pub struct Delay<M: Transducer> {
     /// The wrapped transducer.
-    pub m: M,
+    m: M,
     /// The registered previous output (the delay register).
     pub last: M::Out,
 }
@@ -222,21 +360,22 @@ impl<H: std::hash::Hasher> Machine for Hashing<H> {
 ///
 /// # Panics
 /// Never, on well-formed tables: see the `SAFETY(panic-free)` note on
-/// [`TableMachine::update`]. A malformed table (a transition target `>=`
-/// state count, or `accepting.len() < nstates`) can panic on index — that is
-/// a construction bug, and the type documents the invariant rather than
-/// masking it with `unsafe` unchecked indexing.
+/// [`TableMachine::update`]. Malformed tables are **unrepresentable**: the
+/// validating [`TableMachine::new`] is the only door (fields are private),
+/// so every constructed machine satisfies the shape invariant and `update`
+/// cannot index out of bounds — a malformed-table panic class is excluded
+/// by construction, not documented around.
 #[derive(Debug, Clone, Copy)]
 pub struct TableMachine<'t> {
     /// Row-major transition table, length `nstates * stride`.
-    pub transitions: &'t [u32],
+    transitions: &'t [u32],
     /// Accepting flag per state, length `nstates`.
-    pub accepting: &'t [bool],
+    accepting: &'t [bool],
     /// Alphabet size (row width). `256` for a full byte alphabet;
     /// smaller with an equivalence-class map applied to inputs first.
-    pub stride: usize,
+    stride: usize,
     /// Current state id.
-    pub state: u32,
+    state: u32,
 }
 
 impl<'t> Machine for TableMachine<'t> {
@@ -246,24 +385,38 @@ impl<'t> Machine for TableMachine<'t> {
         self.accepting[self.state as usize]
     }
     fn update(&mut self, symbol: u8) {
-        // SAFETY(panic-free): on a well-formed table every transition target
-        // is a valid state id (`< nstates`) and `stride` matches the row
-        // width, so `state * stride + symbol < transitions.len()`. The index
-        // is bounds-checked regardless; a panic here means the table itself
-        // is malformed (a construction-time bug), not a runtime input issue.
+        // SAFETY(panic-free): `new` validated the table shape — every
+        // transition target `< nstates` and `transitions.len() == nstates *
+        // stride` — so `state * stride + symbol < transitions.len()` when
+        // `symbol < stride`; a `symbol >= stride` (caller fed a raw byte to
+        // a compressed-alphabet table) still hits the bounds check, never UB.
         self.state = self.transitions[self.state as usize * self.stride + symbol as usize];
     }
 }
 
 impl<'t> TableMachine<'t> {
-    /// Build a fresh machine at the start state over the given tables.
-    pub fn new(transitions: &'t [u32], accepting: &'t [bool], stride: usize) -> Self {
-        TableMachine {
+    /// Build a fresh machine at start state `0`, **validating** the table
+    /// shape: `stride > 0`, at least one state, `transitions.len() ==
+    /// accepting.len() * stride`, and every transition target a valid
+    /// state id. Returns `None` on any violation — the malformed-table
+    /// panic class is unrepresentable through this door.
+    pub fn new(transitions: &'t [u32], accepting: &'t [bool], stride: usize) -> Option<Self> {
+        let nstates = accepting.len();
+        let shape_ok = stride > 0
+            && nstates > 0
+            && transitions.len() == nstates.checked_mul(stride)?
+            && transitions.iter().all(|&t| (t as usize) < nstates);
+        shape_ok.then_some(TableMachine {
             transitions,
             accepting,
             stride,
             state: 0,
-        }
+        })
+    }
+
+    /// The current state id (read-only; the tables stay private).
+    pub fn state(&self) -> u32 {
+        self.state
     }
 }
 
@@ -280,8 +433,9 @@ impl<'t> TableMachine<'t> {
 //   to the number of distinct byte-classes (fewer, cache-friendlier rows).
 //   Currently applied externally by the caller (see the test's `class` fn).
 // * Table builder — construct the `&[u32]` slice from a set of
-//   `(state, symbol, next)` transitions with validation, instead of by hand.
-//   Would remove the "malformed table panics" caveat by construction.
+//   `(state, symbol, next)` transitions, instead of by hand. (Purely
+//   convenience: `new` checks shape and rejects malformed tables, so
+//   the builder would add ergonomics, not safety.)
 // * `reset()` — return `state` to 0 for reuse. Minor: `new()` already does
 //   this cheaply since the tables are borrowed.
 // * Weighted output — generalize `Out = bool` (accepting flag) to `Out = S:
@@ -299,7 +453,19 @@ impl<'t> TableMachine<'t> {
 /// **tensor ⊗** of machines.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Par<M, N>(pub M, pub N);
+pub struct Par<M, N>(M, N);
+
+impl<M, N> Par<M, N> {
+    /// Borrow the two components (they are stateful; after driving, the
+    /// state *is* the result — std's `into_inner` convention).
+    pub fn parts(&self) -> (&M, &N) {
+        (&self.0, &self.1)
+    }
+    /// Take the two components back out.
+    pub fn into_parts(self) -> (M, N) {
+        (self.0, self.1)
+    }
+}
 
 impl<M: Machine, N: Machine> Machine for Par<M, N> {
     type In = (M::In, N::In);
@@ -346,7 +512,19 @@ impl<M, N> Par<M, N> {
 /// `Pipe(a,Pipe(b,c))` define literally the same update sequence.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Pipe<M, N>(pub M, pub N);
+pub struct Pipe<M, N>(M, N);
+
+impl<M, N> Pipe<M, N> {
+    /// Borrow the two components (they are stateful; after driving, the
+    /// state *is* the result — std's `into_inner` convention).
+    pub fn parts(&self) -> (&M, &N) {
+        (&self.0, &self.1)
+    }
+    /// Take the two components back out.
+    pub fn into_parts(self) -> (M, N) {
+        (self.0, self.1)
+    }
+}
 
 impl<M, N> Machine for Pipe<M, N>
 where
@@ -391,7 +569,14 @@ where
 /// local optimization precisely *because* the law guarantees stability.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Feedback<M>(pub M);
+pub struct Feedback<M>(M);
+
+impl<M> Feedback<M> {
+    /// Take the wrapped machine back out (std's `into_inner` convention).
+    pub fn into_inner(self) -> M {
+        self.0
+    }
+}
 
 impl<I, O, F, M> Machine for Feedback<M>
 where
@@ -413,6 +598,7 @@ where
 /// stateless: a readout with no input needs a register, so the identity
 /// lives on the transducer side, echoing creature_feature's `whole`;
 /// wrap in [`Delay`] to enter Moore wiring.)
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Echo<A>(core::marker::PhantomData<fn(A) -> A>);
 /// Constructor for the identity transducer at type `A`.
 pub fn echo<A>() -> Echo<A> {
@@ -448,7 +634,13 @@ impl<A, B: Clone> Machine for Const<A, B> {
 }
 
 /// A pure function as a stateless [`Transducer`] (cf. `iter::from_fn`).
+#[derive(Clone, Copy)]
 pub struct FromFn<A, F>(pub F, core::marker::PhantomData<fn(A)>);
+impl<A, F> core::fmt::Debug for FromFn<A, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FromFn").finish_non_exhaustive()
+    }
+}
 
 /// Constructor for [`FromFn`] (the `PhantomData` carries the otherwise
 /// unconstrained input type — E0207 workaround, kept private).
@@ -482,7 +674,12 @@ pub fn run_history<M: Machine>(m: &mut M, history: impl IntoIterator<Item = M::I
 /// the machine side: an `Absorb` is a machine that keeps its counsel; a
 /// machine is an `Absorb` plus a readout.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
-pub struct Driven<M>(pub M);
+pub struct Driven<M>(
+    /// Public on purpose (the carrier exception, cf.
+    /// [`crate::base::Pair`]): after driving, the wrapped machine *is*
+    /// the result — `driven.0.out()` is how you read it back.
+    pub M,
+);
 
 /// Borrow a transducer as a transducer — `Iterator::by_ref`, transposed.
 /// A blanket `impl Transducer for &mut M` would overlap the Moore⊂Mealy
@@ -505,8 +702,9 @@ impl<M: Transducer> crate::base::Absorb<M::In> for Driven<M> {
 }
 
 /// Strong at transducer grade: act on the first component, carry the rest.
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OnFirstTransducer<C, M>(pub M, core::marker::PhantomData<fn(C)>);
+pub struct OnFirstTransducer<C, M>(M, core::marker::PhantomData<fn(C)>);
 /// Constructor for [`OnFirstTransducer`].
 pub fn on_first_transducer<C, M: Transducer>(m: M) -> OnFirstTransducer<C, M> {
     OnFirstTransducer(m, core::marker::PhantomData)
@@ -520,8 +718,9 @@ impl<C, M: Transducer> Transducer for OnFirstTransducer<C, M> {
 }
 
 /// Strong on the second component (mirror of [`OnFirstTransducer`]).
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OnSecondTransducer<C, M>(pub M, core::marker::PhantomData<fn(C)>);
+pub struct OnSecondTransducer<C, M>(M, core::marker::PhantomData<fn(C)>);
 /// Constructor for [`OnSecondTransducer`].
 pub fn on_second_transducer<C, M: Transducer>(m: M) -> OnSecondTransducer<C, M> {
     OnSecondTransducer(m, core::marker::PhantomData)
@@ -536,8 +735,9 @@ impl<C, M: Transducer> Transducer for OnSecondTransducer<C, M> {
 
 /// Choice on the `Err` branch (mirror of [`MapOkTransducer`]): step on `Err`, pass
 /// `Ok` through. No bound — a `match` moves into one arm.
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MapErrTransducer<O, M>(pub M, core::marker::PhantomData<fn(O)>);
+pub struct MapErrTransducer<O, M>(M, core::marker::PhantomData<fn(O)>);
 /// Constructor for [`MapErrTransducer`].
 pub fn on_err_transducer<O, M: Transducer>(m: M) -> MapErrTransducer<O, M> {
     MapErrTransducer(m, core::marker::PhantomData)
@@ -569,6 +769,15 @@ pub trait Layer<M> {
     type Wrapped;
     /// Wrap a machine, producing the transformed machine.
     fn layer(&self, inner: M) -> Self::Wrapped;
+
+    /// Stack `b` outside `self` — build [`ThenLayer`]
+    /// (`a.then(b).layer(m) == b.layer(a.layer(m))`).
+    fn then<B>(self, b: B) -> ThenLayer<Self, B>
+    where
+        Self: Sized,
+    {
+        ThenLayer(self, b)
+    }
 }
 
 /// The identity layer — the unit of [`ThenLayer`], making machine
@@ -587,7 +796,7 @@ impl<M> Layer<M> for IdLayer {
 /// Associative with the identity layer (id) — the endofunctor category's
 /// composition.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ThenLayer<A, B>(pub A, pub B);
+pub struct ThenLayer<A, B>(A, B);
 impl<M, A: Layer<M>, B: Layer<A::Wrapped>> Layer<M> for ThenLayer<A, B> {
     type Wrapped = B::Wrapped;
     fn layer(&self, inner: M) -> Self::Wrapped {
@@ -599,8 +808,13 @@ impl<M, A: Layer<M>, B: Layer<A::Wrapped>> Layer<M> for ThenLayer<A, B> {
 /// (A concrete `Layer` instance; premap/onfirst analogues follow the same
 /// shape and are left to users so the crate ships the pattern, not every
 /// point.)
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct PostmapLayer<G>(pub G);
+impl<G> core::fmt::Debug for PostmapLayer<G> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PostmapLayer").finish_non_exhaustive()
+    }
+}
 impl<M: Transducer, G: FnMut(M::Out) -> B + Clone, B> Layer<M> for PostmapLayer<G> {
     type Wrapped = Postmap<M, G>;
     fn layer(&self, inner: M) -> Postmap<M, G> {
@@ -613,7 +827,16 @@ impl<M: Transducer, G: FnMut(M::Out) -> B + Clone, B> Layer<M> for PostmapLayer<
 // stateful carriers, `&mut` through split borrows, intermediates by value.
 
 /// Contravariant action on the input: profunctor `lmap` / `contramap`.
-pub struct Premap<A, F, M>(pub F, pub M, core::marker::PhantomData<fn(A)>);
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
+#[derive(Clone, Copy)]
+pub struct Premap<A, F, M>(F, M, core::marker::PhantomData<fn(A)>);
+impl<A, F, M: core::fmt::Debug> core::fmt::Debug for Premap<A, F, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Premap")
+            .field("m", &self.1)
+            .finish_non_exhaustive()
+    }
+}
 /// Constructor for [`Premap`] (`PhantomData` pins the input type: with no
 /// trait parameters on `Transducer`, an impl cannot constrain `A` any
 /// other way).
@@ -634,8 +857,16 @@ impl<A, M: Transducer, F: FnMut(A) -> M::In> Transducer for Premap<A, F, M> {
 
 /// Covariant action on the output: profunctor `rmap`.
 /// (`Premap` + `Postmap` together are `dimap`: machines are profunctors.)
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Postmap<M, G>(pub M, pub G);
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
+#[derive(Clone, Copy, Default)]
+pub struct Postmap<M, G>(M, G);
+impl<M: core::fmt::Debug, G> core::fmt::Debug for Postmap<M, G> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Postmap")
+            .field("m", &self.0)
+            .finish_non_exhaustive()
+    }
+}
 impl<B, M: Transducer, G: FnMut(M::Out) -> B> Transducer for Postmap<M, G> {
     type In = M::In;
     type Out = B;
@@ -654,7 +885,9 @@ impl<B, M: Transducer, G: FnMut(M::Out) -> B> Transducer for Postmap<M, G> {
 /// Additive structure — **no duplication bound**: a `match` moves the value
 /// into exactly one branch (the coproduct's adjunction is unconditional in
 /// an affine category).
-pub struct MapOkTransducer<E, M>(pub M, core::marker::PhantomData<fn(E)>);
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MapOkTransducer<E, M>(M, core::marker::PhantomData<fn(E)>);
 /// Constructor for [`MapOkTransducer`].
 pub fn on_ok_transducer<E, M: Transducer>(m: M) -> MapOkTransducer<E, M> {
     MapOkTransducer(m, core::marker::PhantomData)
@@ -674,8 +907,21 @@ impl<E, M: Transducer> Transducer for MapOkTransducer<E, M> {
 /// the coproduct's universal morphism at the FnMut grade. No bounds.
 /// (The contravariant `Decidable`'s `choose` is `Premap` of a splitter
 /// `A -> Result<B, C>` composed onto this — derived, not shipped.)
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ConsumeResultTransducer<M, N>(pub M, pub N);
+pub struct ConsumeResultTransducer<M, N>(M, N);
+
+impl<M, N> ConsumeResultTransducer<M, N> {
+    /// Borrow the two components (they are stateful; after driving, the
+    /// state *is* the result — std's `into_inner` convention).
+    pub fn parts(&self) -> (&M, &N) {
+        (&self.0, &self.1)
+    }
+    /// Take the two components back out.
+    pub fn into_parts(self) -> (M, N) {
+        (self.0, self.1)
+    }
+}
 impl<M: Transducer, N: Transducer<Out = M::Out>> Transducer for ConsumeResultTransducer<M, N> {
     type In = Result<M::In, N::In>;
     type Out = M::Out;
@@ -697,8 +943,20 @@ impl<M: Transducer, N: Transducer<Out = M::Out>> Transducer for ConsumeResultTra
 /// are free (here), and only the genuine diagonal — both machines wanting
 /// the *whole* value, [`DuplicateToTransducer`] — pays the [`crate::base::Unaliased`]
 /// bound.
-pub struct AlongsideTransducer<A, D, S, T>(pub D, pub S, pub T, core::marker::PhantomData<fn(A)>);
-/// Constructor for [`crate::base::Alongside`].
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
+#[derive(Clone, Copy)]
+pub struct AlongsideTransducer<A, D, S, T>(D, S, T, core::marker::PhantomData<fn(A)>);
+impl<A, D, S: core::fmt::Debug, T: core::fmt::Debug> core::fmt::Debug
+    for AlongsideTransducer<A, D, S, T>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AlongsideTransducer")
+            .field("s", &self.1)
+            .field("t", &self.2)
+            .finish_non_exhaustive()
+    }
+}
+/// Constructor for [`AlongsideTransducer`].
 pub fn split_transducer<A, B, C, D, S, T>(d: D, s: S, t: T) -> AlongsideTransducer<A, D, S, T>
 where
     D: FnMut(A) -> (B, C),
@@ -734,7 +992,23 @@ where
 /// `⊕`/`⊗`.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DuplicateToMachine<A, B>(pub A, pub B);
+pub struct DuplicateToMachine<A, B>(A, B);
+
+impl<A, B> DuplicateToMachine<A, B> {
+    /// Cross-module door for sibling wrappers ([`crate::weighted`]);
+    /// public construction is [`Machine::duplicate_to`].
+    pub(crate) const fn new(a: A, b: B) -> Self {
+        DuplicateToMachine(a, b)
+    }
+    /// Borrow the two components.
+    pub fn parts(&self) -> (&A, &B) {
+        (&self.0, &self.1)
+    }
+    /// Take the two components back out.
+    pub fn into_parts(self) -> (A, B) {
+        (self.0, self.1)
+    }
+}
 
 impl<I, A, B> Machine for DuplicateToMachine<A, B>
 where
@@ -762,7 +1036,19 @@ where
 /// the [`crate::base::Unaliased`] bound.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DuplicateToTransducer<M, N>(pub M, pub N);
+pub struct DuplicateToTransducer<M, N>(M, N);
+
+impl<M, N> DuplicateToTransducer<M, N> {
+    /// Borrow the two components (they are stateful; after driving, the
+    /// state *is* the result — std's `into_inner` convention).
+    pub fn parts(&self) -> (&M, &N) {
+        (&self.0, &self.1)
+    }
+    /// Take the two components back out.
+    pub fn into_parts(self) -> (M, N) {
+        (self.0, self.1)
+    }
+}
 impl<M, N> Transducer for DuplicateToTransducer<M, N>
 where
     M: Transducer,
@@ -986,13 +1272,24 @@ mod tests {
             _ => 3,
         };
         let matches = |s: &[u8]| {
-            let mut m = TableMachine::new(&t, &acc, 4);
+            // `new` validates the table shape; this one is well-formed.
+            let mut m = TableMachine::new(&t, &acc, 4).expect("well-formed table");
             run_history(&mut m, s.iter().map(|&b| class(b)))
         };
         assert!(matches(b"ac"));
         assert!(matches(b"abbbc"));
         assert!(!matches(b"ab"));
         assert!(!matches(b"axc"));
+    }
+
+    #[test]
+    fn table_machine_new_makes_malformed_tables_unrepresentable() {
+        let acc = [false, true];
+        assert!(TableMachine::new(&[1, 0, 1, 0], &acc, 2).is_some());
+        assert!(TableMachine::new(&[1, 0, 1], &acc, 2).is_none()); // wrong length
+        assert!(TableMachine::new(&[1, 0, 2, 0], &acc, 2).is_none()); // target >= nstates
+        assert!(TableMachine::new(&[], &[], 2).is_none()); // zero states
+        assert!(TableMachine::new(&[], &acc, 0).is_none()); // zero stride
     }
 
     #[test]

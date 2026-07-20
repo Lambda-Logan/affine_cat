@@ -6,7 +6,7 @@
 //! `HolesWrap`), whose obligations are unrepresentable for it.
 //! `Layer<'a, T>` borrows payloads from the arena, `unzip` is
 //! shape-only, and [`Pair`] rides for free.
-use affine_cat::cata::{FoldAlg, Hole, HolesIn, Pair, Recursive, ScopeGuard};
+use affine_cat::cata::{FoldAlg, Hole, HolesIn, Recursive, ScopeGuard};
 use core::ops::ControlFlow;
 
 /// the handle: a child is an index; the nodes live in the arena
@@ -98,14 +98,39 @@ where
     at.root.map_ref_in(at.ar, &mut |node| {
         let layer = match node {
             RelNode::Scan(t) => RelLayer::Scan(t),
-            RelNode::Filter(r, p) => {
-                RelLayer::Filter(cata(At { ar: at.ar, root: *r }, alg), p)
-            }
-            RelNode::Union(a, b) => RelLayer::Union(
-                cata(At { ar: at.ar, root: *a }, alg),
-                cata(At { ar: at.ar, root: *b }, alg),
+            RelNode::Filter(r, p) => RelLayer::Filter(
+                cata(
+                    At {
+                        ar: at.ar,
+                        root: *r,
+                    },
+                    alg,
+                ),
+                p,
             ),
-            RelNode::Exists(r) => RelLayer::Exists(cata(At { ar: at.ar, root: *r }, alg)),
+            RelNode::Union(a, b) => RelLayer::Union(
+                cata(
+                    At {
+                        ar: at.ar,
+                        root: *a,
+                    },
+                    alg,
+                ),
+                cata(
+                    At {
+                        ar: at.ar,
+                        root: *b,
+                    },
+                    alg,
+                ),
+            ),
+            RelNode::Exists(r) => RelLayer::Exists(cata(
+                At {
+                    ar: at.ar,
+                    root: *r,
+                },
+                alg,
+            )),
         };
         alg.reduce(&(), layer)
     })
@@ -120,12 +145,34 @@ where
 {
     let layer = match at.ar.node(at.root) {
         RelNode::Scan(t) => RelLayer::Scan(t),
-        RelNode::Filter(r, p) => {
-            RelLayer::Filter(cata_in(At { ar: at.ar, root: *r }, env, alg), p)
-        }
+        RelNode::Filter(r, p) => RelLayer::Filter(
+            cata_in(
+                At {
+                    ar: at.ar,
+                    root: *r,
+                },
+                env,
+                alg,
+            ),
+            p,
+        ),
         RelNode::Union(a, b) => RelLayer::Union(
-            cata_in(At { ar: at.ar, root: *a }, env, alg),
-            cata_in(At { ar: at.ar, root: *b }, env, alg),
+            cata_in(
+                At {
+                    ar: at.ar,
+                    root: *a,
+                },
+                env,
+                alg,
+            ),
+            cata_in(
+                At {
+                    ar: at.ar,
+                    root: *b,
+                },
+                env,
+                alg,
+            ),
         ),
         RelNode::Exists(r) => RelLayer::Exists({
             // ORDER IS THE CONTRACT: snapshot FIRST, then mutate. The
@@ -136,7 +183,14 @@ where
             let saved = affine_cat::cata::ScopedEnv::enter(env);
             env.push(0); // the binding enters INSIDE the frame
             let mut g = ScopeGuard::from_frame(&mut *env, saved);
-            cata_in(At { ar: at.ar, root: *r }, g.env(), alg)
+            cata_in(
+                At {
+                    ar: at.ar,
+                    root: *r,
+                },
+                g.env(),
+                alg,
+            )
         }),
     };
     alg.reduce(&*env, layer)
@@ -191,14 +245,17 @@ impl<'ar> FoldAlg<At<'ar>, Vec<u32>> for MaxBinders {
 fn main() {
     // hash-consed by hand: Scan shared by both Union arms
     let ar = Arena(vec![
-        RelNode::Scan(0),          // 0
-        RelNode::Filter(Rel(0), 7), // 1  (shares node 0)
+        RelNode::Scan(0),               // 0
+        RelNode::Filter(Rel(0), 7),     // 1  (shares node 0)
         RelNode::Union(Rel(1), Rel(0)), // 2 (shares node 0 again)
     ]);
-    let at = At { ar: &ar, root: Rel(2) };
+    let at = At {
+        ar: &ar,
+        root: Rel(2),
+    };
 
     // one pass, two algebras — Pair works because unzip is shape-only
-    let (count, depth) = cata(at, &Pair(Count, Depth));
+    let (count, depth) = cata(at, &Count.pair(Depth));
     assert_eq!(count, 4, "shared node counted per PATH (the O(paths) doc)");
     assert_eq!(depth, 3);
 
@@ -211,7 +268,14 @@ fn main() {
         RelNode::Exists(Rel(3)),        // 4  (outer binder)
     ]);
     let mut env: Vec<u32> = vec![];
-    let deepest = cata_in(At { ar: &ar2, root: Rel(4) }, &mut env, &MaxBinders);
+    let deepest = cata_in(
+        At {
+            ar: &ar2,
+            root: Rel(4),
+        },
+        &mut env,
+        &MaxBinders,
+    );
     assert_eq!(deepest, 2, "inner Scan sees two binders, outer path one");
     assert!(env.is_empty(), "balanced — the guard, over an arena");
 

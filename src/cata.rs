@@ -841,8 +841,19 @@ impl<'e, E: ScopedEnv + ?Sized> Drop for ScopeGuard<'e, E> {
 /// two passes. (The consistent future shape, if a consumer names it, is
 /// a pair GATED on payload `Comonoid` — priced duplication, the house
 /// pattern — not a refusal.)
+#[must_use = "an algebra does nothing until a tree is folded with it"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PairOwned<F, G>(pub F, pub G);
+pub struct PairOwned<F, G>(F, G);
+
+/// Free-function door for [`PairOwned`] — **unbounded**, unlike
+/// [`IntoFoldAlg::pair_owned`], so it stays inference-transparent: a
+/// tree-polymorphic algebra like [`Rebuild`] can be paired here without
+/// pinning `R`/`Env` at the construction site (the method form must
+/// select an impl to be called at all; the fold pins the types later
+/// either way).
+pub fn pair_owned<F, G>(f: F, g: G) -> PairOwned<F, G> {
+    PairOwned(f, g)
+}
 
 impl<R, Env, F, G> IntoFoldAlg<R, Env> for PairOwned<F, G>
 where
@@ -901,6 +912,15 @@ pub trait IntoFoldAlg<R: RecursiveOwned + ?Sized, Env: ?Sized> {
     /// remaining thunks unconsumed — and unforced.
     fn absorbing(&self, _out: &Self::Out) -> bool {
         false
+    }
+
+    /// Banana-split at the owned grade — build [`PairOwned`]: `self`
+    /// consumes the payloads, `g` (a borrowing [`FoldAlg`]) reads them.
+    fn pair_owned<G>(self, g: G) -> PairOwned<Self, G>
+    where
+        Self: Sized,
+    {
+        PairOwned(self, g)
     }
 }
 
@@ -1048,7 +1068,6 @@ impl<T> Hole<T> for Thunk<T> {
 // the impl was: Cell<Option<Box<dyn FnOnce() -> T + Send>>>, consuming-
 // only per the husk sacrifice, HolesWrap at T: Send + 'static.
 
-
 /// Memoization slot without a stored producer: folds as a maybe-present
 /// child (`Mapped<U> = Option<U>`) — you cannot force what has no thunk.
 impl<T> Hole<T> for core::cell::OnceCell<T> {
@@ -1127,11 +1146,29 @@ pub trait FoldAlg<R: Recursive + ?Sized, Env: ?Sized> {
     fn absorbing(&self, _out: &Self::Out) -> bool {
         false
     }
+
+    /// Banana-split with a second algebra — build [`Pair`]: one
+    /// traversal, both results.
+    fn pair<G>(self, g: G) -> Pair<Self, G>
+    where
+        Self: Sized,
+    {
+        Pair(self, g)
+    }
+
+    /// Weaken to any environment — build [`AtAny`] (defined when this
+    /// algebra's `Env = ()`).
+    fn at_any(self) -> AtAny<Self>
+    where
+        Self: Sized,
+    {
+        AtAny(self)
+    }
 }
 
 /// A shared reference to an algebra is an algebra — reuse one algebra
 /// across folds and [`Pair`]s without moving or cloning it:
-/// `Pair(&a, &b)` composes borrowed. (Advanced-usage gap, closed: every
+/// `(&a).pair(&b)` composes borrowed. (Advanced-usage gap, closed: every
 /// method already took `&self`; only the blanket was missing.)
 impl<R: Recursive + ?Sized, Env: ?Sized, A: FoldAlg<R, Env>> FoldAlg<R, Env> for &A {
     type Out = A::Out;
@@ -1164,8 +1201,15 @@ impl<R: RecursiveOwned + ?Sized, Env: ?Sized, A: IntoFoldAlg<R, Env>> IntoFoldAl
 /// blanket impl would collide with direct impls under coherence.
 /// Composes with [`Pair`]: `Pair(env_using, AtAny(env_free))` is the
 /// common one-traversal shape.
+#[must_use = "an algebra does nothing until a tree is folded with it"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct AtAny<F>(pub F);
+pub struct AtAny<F>(F);
+
+/// Free-function door for [`AtAny`] — unbounded, inference-transparent
+/// (see [`pair_owned`]).
+pub fn at_any<F>(f: F) -> AtAny<F> {
+    AtAny(f)
+}
 
 impl<R, Env, F> FoldAlg<R, Env> for AtAny<F>
 where
@@ -1200,8 +1244,16 @@ where
 /// THIS `Pair` is the fold grade, where the layer is lent by reference
 /// and the toll is dodged entirely — the banana-as-signature story.
 /// Same product, three prices.
+#[must_use = "an algebra does nothing until a tree is folded with it"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Pair<F, G>(pub F, pub G);
+pub struct Pair<F, G>(F, G);
+
+/// Free-function door for [`Pair`] — unbounded (see [`pair_owned`] for
+/// why the free forms exist beside the methods: inference transparency
+/// for tree-polymorphic algebras, plus the symmetric reading).
+pub fn pair<F, G>(f: F, g: G) -> Pair<F, G> {
+    Pair(f, g)
+}
 
 impl<R, Env, F, G> FoldAlg<R, Env> for Pair<F, G>
 where

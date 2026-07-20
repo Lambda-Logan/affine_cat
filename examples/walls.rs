@@ -1,6 +1,6 @@
 //! The four unfixable walls, each demonstrated firing, with the lawful
 //! alternative beside it. Compile-error walls are probed separately.
-use affine_cat::cata::{run, FoldAlg, IntoFoldAlg, PairOwned, Rebuild, Recursor, Thunk};
+use affine_cat::cata::{run, FoldAlg, IntoFoldAlg, Rebuild, Recursor, Thunk};
 use affine_cat_derive::Recursive;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -152,7 +152,8 @@ fn main() {
     assert_eq!(spine(0, 2_000).into_fold(&(), &Find(3)), Some(3));
     let search_alone = FORCED.load(Relaxed);
     FORCED.store(0, Relaxed);
-    let (_copy, found) = spine(0, 2_000).into_fold(&(), &PairOwned(Rebuild, Find(3)));
+    let (_copy, found) =
+        spine(0, 2_000).into_fold(&(), &affine_cat::cata::pair_owned(Rebuild, Find(3)));
     assert_eq!(found, Some(3));
     let paired = FORCED.load(Relaxed);
     println!(

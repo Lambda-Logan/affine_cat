@@ -2,7 +2,7 @@
 //! borrowed forcing (the husk sacrifice), so codata folds go through
 //! `into_fold` — where a second fold is E0382, and single-forcing is
 //! enforced by the checker. Two passes fuse via `PairOwned`.
-use affine_cat::cata::{FoldAlg, IntoFoldAlg, PairOwned, Thunk};
+use affine_cat::cata::{pair_owned, FoldAlg, IntoFoldAlg, Thunk};
 use affine_cat_derive::Recursive;
 use std::cell::LazyCell;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -77,7 +77,7 @@ fn main() {
 
     // Codata is affine, now statically: the fusion of two passes is
     // PairOwned, and there is no second fold to mistakenly write.
-    let (sum, depth) = range(1, N).into_fold(&(), &PairOwned(Sum, Depth));
+    let (sum, depth) = range(1, N).into_fold(&(), &pair_owned(Sum, Depth));
     assert_eq!(sum, N * (N + 1) / 2);
     assert_eq!(depth, 17);
     let (total, peak, live_now) = (TOTAL.load(Relaxed), PEAK.load(Relaxed), LIVE.load(Relaxed));
@@ -109,7 +109,10 @@ fn main() {
     let t = L::Node(
         LazyCell::new(|| Box::new(L::Tip(2))),
         LazyCell::new(|| {
-            Box::new(L::Node(LazyCell::new(|| Box::new(L::Tip(3))), LazyCell::new(|| Box::new(L::Tip(4)))))
+            Box::new(L::Node(
+                LazyCell::new(|| Box::new(L::Tip(3))),
+                LazyCell::new(|| Box::new(L::Tip(4))),
+            ))
         }),
     );
     assert_eq!(t.fold(&(), &SumL), 9);
@@ -147,8 +150,14 @@ fn main() {
     let r = poisoned(1, N, 3).into_fold(&(), &TrySum);
     assert!(r.is_err());
     let forced = FORCED.load(Relaxed);
-    println!("fallible over codata: err after forcing {forced} of {} nodes", 2 * N - 1);
-    assert!(forced as i64 <= 2 * 17 + 2, "error forced a path, not the tree");
+    println!(
+        "fallible over codata: err after forcing {forced} of {} nodes",
+        2 * N - 1
+    );
+    assert!(
+        forced as i64 <= 2 * 17 + 2,
+        "error forced a path, not the tree"
+    );
 
     // SEARCH OVER AN INFINITE TREE, consuming path. Order caveat stands:
     // finite work declared before the infinite tail, or the fold diverges.

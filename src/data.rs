@@ -59,6 +59,7 @@ macro_rules! functor_seq {
 /// * identity and composition as in [`MapMut`], for `fmap_once`.
 /// * coherence with the supertrait: `x.fmap_once(f) == x.fmap(f)`
 ///   whenever `f` is `FnMut` — the grades agree where both apply.
+///
 /// Method-name note: `fmap`, not `map` — an extension-trait `map`
 /// silently loses to inherent methods (`Option::map`, `Iterator::map`)
 /// during method resolution, a divergence hazard.
@@ -152,7 +153,7 @@ impl<A> MapMut<A> for Vec<A> {
 /// # Future directions
 /// Pearlite annotations discharging this law in Creusot; laws are kept in
 /// one greppable doc format so the annotation step stays mechanical.
-pub fn map_in_place<A>(xs: &mut Vec<A>, mut f: impl FnMut(&mut A)) {
+pub fn map_in_place<A>(xs: &mut [A], mut f: impl FnMut(&mut A)) {
     for a in xs.iter_mut() {
         f(a);
     }
@@ -332,7 +333,13 @@ impl<A, B, const N: usize> Zip<A, B> for [A; N] {
 /// `Apply`, **not** `Applicative` — a lawful `pure` would be the infinite
 /// repetition, which a strict finite carrier cannot represent. The unit is
 /// absent by theorem, not omission.
-pub struct ZipVec<A>(pub Vec<A>);
+pub struct ZipVec<A>(
+    /// Public on purpose (the carrier exception, cf.
+    /// [`crate::base::Pair`]): the wrapper *is* a `Vec` wearing its
+    /// second monoidal structure, and `.0` is how the vector goes in and
+    /// comes back out.
+    pub Vec<A>,
+);
 impl<A, B> Zip<A, B> for ZipVec<A> {
     type Rhs = ZipVec<B>;
     type Zipped = ZipVec<(A, B)>;
@@ -404,6 +411,7 @@ where
 /// * a `FromVisit`-style accumulator trait (the Moore/`Accumulates`
 ///   shape) fusing visitation with accumulation, one pass, two outputs.
 /// * initial→final adapter structs for iterator-backed sources.
+///
 /// **Not object-safe**: `visit<R>` is generic over the break type. A
 /// `ControlFlow<()>`-fixed sub-trait could be erased if needed (deferred).
 pub trait Visit<Input> {
@@ -428,6 +436,16 @@ pub trait Visit<Input> {
             f(t);
             ControlFlow::<()>::Continue(())
         });
+    }
+
+    /// Concatenate with another visitor over the same input — build
+    /// [`Chain`] (`self`'s items tagged `Left`, then `other`'s tagged
+    /// `Right`).
+    fn chain<B>(self, other: B) -> Chain<Self, B>
+    where
+        Self: Sized,
+    {
+        Chain(self, other)
     }
 }
 
@@ -460,7 +478,8 @@ impl<'a, T: Clone, const N: usize> Visit<&'a [T]> for ArrayWindows<N> {
 /// `&Input` is free (shared references are `Copy`; visitors only read).
 /// Sum-typed output stream, A's items then B's — the shape of
 /// `iter::Chain`, tagged.
-pub struct Chain<A, B>(pub A, pub B);
+#[must_use = "a visitor does nothing until driven"]
+pub struct Chain<A, B>(A, B);
 
 /// Tagged item of [`Chain`] — a sum, `Left`/`Right` per the
 /// `either`-crate convention.

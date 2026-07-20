@@ -1,7 +1,7 @@
 //! Borrowed-edition derive: the fold lends payloads (&'a P) — no Clone,
 //! no Comonoid, the tree survives, Pair works on NON-duplicable payloads,
 //! and custom pointer types are holes via a 15-line Holes impl.
-use affine_cat::cata::{FoldAlg, Pair};
+use affine_cat::cata::FoldAlg;
 use affine_cat::deref_holes;
 use affine_cat_derive::Recursive;
 
@@ -110,7 +110,7 @@ fn main() {
         ))),
     );
 
-    let (v, s) = e.fold(&(), &Pair(Eval, Show)); // tree still alive after
+    let (v, s) = e.fold(&(), &Eval.pair(Show)); // tree still alive after
     println!("{s} = {v}");
     assert_eq!(v, 4);
     let v2 = e.fold(&(), &Eval); // fold again: it borrows
@@ -124,6 +124,6 @@ fn main() {
             Box::new(Tagged::Tip(Opaque(5))),
         )),
     );
-    assert_eq!(t.fold(&(), &Pair(Count, MaxTag)), (3, 9));
+    assert_eq!(t.fold(&(), &Count.pair(MaxTag)), (3, 9));
     println!("ok: zero clones, zero Comonoid, tree survives, custom pointer works");
 }

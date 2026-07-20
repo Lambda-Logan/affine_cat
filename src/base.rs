@@ -115,6 +115,7 @@ impl<T: Clone> Comonoid for T {
 /// * Relaxation escape: per RFC 1105, *loosening* a bound from `Unaliased`
 ///   to `Comonoid` on any combinator is a non-breaking change. That
 ///   asymmetry is why [`DuplicateTo`] starts strict.
+///
 /// (Terminology: the *independent comonoid* contract — duplication whose
 /// halves share no observable state, i.e. produce no aliasing.)
 pub trait Unaliased: Comonoid {}
@@ -196,11 +197,15 @@ impl<A: Unaliased + Clone> Unaliased for alloc::collections::VecDeque<A> {}
 //   traits through unchanged signatures (a silent breaking change, per
 //   RFC 1522's own drawbacks section). Permitted at construction rims,
 //   never as the foundation. Reopens if TAIT/ATPIT stabilizes.
-// * Hiding the combinator types behind abstraction — rejected on
-//   principle: a leak is only a leak when the abstraction was supposed
-//   to hide something. `Link<F, G>` is not an implementation detail; it
-//   is the syntax of the free category, advertised (the `Iterator`
-//   adapter precedent).
+// * Hiding the combinator *types* behind abstraction — rejected:
+//   `Link<F, G>` is the syntax of the free category and must stay
+//   nameable so pipelines can be stored in fields (the RPITIT rejection
+//   above is exactly the cost of losing the name). Representation is a
+//   *separate* decision, and the `Iterator` adapter precedent cuts the
+//   other way on it: `Map`'s fields are `pub(crate)`, its constructor
+//   `pub(in crate::iter)`, and `.map()` is the only public door.
+//   Followed here: nameable types, private fields, trait methods as the
+//   sole constructors. Two decisions, two answers, one precedent.
 
 /// A **`Piece`** — a morphism of the affine pipeline category. Objects are
 /// Rust types; a `Piece<A, Out = B>` is an arrow `A -> B`; [`Link`] is
@@ -222,52 +227,106 @@ pub trait Piece<A> {
     type Out;
     /// Apply the morphism.
     fn run(&self, a: A) -> Self::Out;
-}
 
-/// Method-chaining sugar for building pipelines left-to-right. Every
-/// [`Piece`] gets these for free (blanket impl); each returns the
-/// corresponding combinator struct, so `f.link(g)` is `Link(f, g)`,
-/// `f.duplicate_to(g)` is `DuplicateTo(f, g)`, and so on — the composition reads as a
-/// chain rather than nesting constructor calls.
-pub trait PieceExt<A>: Piece<A> + Sized {
+    // --- Provided combinator methods (the `Iterator` form: on the trait
+    // itself, each `where Self: Sized` so `dyn Piece` stays object-safe;
+    // std merged its `IteratorExt` the same way pre-1.0). Building is
+    // lazy — nothing runs until `run`. ---
+
     /// Composition `g ∘ f`: build [`Link`]. See its docs.
-    fn link<G: Piece<Self::Out>>(self, g: G) -> Link<Self, G> {
+    fn link<G: Piece<Self::Out>>(self, g: G) -> Link<Self, G>
+    where
+        Self: Sized,
+    {
         Link(self, g)
     }
     /// The **diagonal** `⟨self, g⟩` — build [`DuplicateTo`]. Copies the input, so
     /// it needs `A: Unaliased` at the point of use.
-    fn duplicate_to<G: Piece<A>>(self, g: G) -> DuplicateTo<Self, G> {
+    fn duplicate_to<G: Piece<A>>(self, g: G) -> DuplicateTo<Self, G>
+    where
+        Self: Sized,
+    {
         DuplicateTo(self, g)
     }
     /// Kleisli `>=>` on `Ok` — build [`LinkOk`].
-    fn link_ok<G>(self, g: G) -> LinkOk<Self, G> {
+    fn link_ok<G>(self, g: G) -> LinkOk<Self, G>
+    where
+        Self: Sized,
+    {
         LinkOk(self, g)
     }
     /// Kleisli on `Err` (recovery) — build [`LinkErr`].
-    fn link_err<G>(self, g: G) -> LinkErr<Self, G> {
+    fn link_err<G>(self, g: G) -> LinkErr<Self, G>
+    where
+        Self: Sized,
+    {
         LinkErr(self, g)
     }
     /// Map the `Ok` arm — build [`MapOk`].
-    fn map_ok(self) -> MapOk<Self> {
+    fn map_ok(self) -> MapOk<Self>
+    where
+        Self: Sized,
+    {
         MapOk(self)
     }
     /// Map the `Err` arm — build [`MapErr`].
-    fn map_err(self) -> MapErr<Self> {
+    fn map_err(self) -> MapErr<Self>
+    where
+        Self: Sized,
+    {
         MapErr(self)
     }
+    /// Act on the **first** tensor component — build [`OnFirst`]. The
+    /// passenger type binds at the use site (the composite is a
+    /// `Piece<(A, C)>`), so no annotation is needed here.
+    fn on_first(self) -> OnFirst<Self>
+    where
+        Self: Sized,
+    {
+        OnFirst(self)
+    }
+    /// Act on the **second** tensor component — build [`OnSecond`].
+    fn on_second(self) -> OnSecond<Self>
+    where
+        Self: Sized,
+    {
+        OnSecond(self)
+    }
+    /// The **monoidal tensor** `self ⊗ g` — build [`Alongside`]. Also a
+    /// free function ([`alongside`]); the `std::iter::zip` precedent —
+    /// both doors, same combinator.
+    fn alongside<C, G: Piece<C>>(self, g: G) -> Alongside<Self, G>
+    where
+        Self: Sized,
+    {
+        Alongside(self, g)
+    }
+    /// The **copairing** `[self, g]` — build [`ConsumeResult`]. Also a
+    /// free function ([`consume_result`]); both doors, same combinator.
+    fn consume_result<B, G: Piece<B, Out = Self::Out>>(self, g: G) -> ConsumeResult<Self, G>
+    where
+        Self: Sized,
+    {
+        ConsumeResult(self, g)
+    }
 }
-impl<A, P: Piece<A>> PieceExt<A> for P {}
 
-/// The **monoidal tensor** `self ⊗ g` on a pair — build [`Alongside`]. Free
-/// (separate inputs; see its docs). A free function rather than a method
-/// because its input type is a pair `(A, C)`, distinct from `self`'s input.
+/// The **monoidal tensor** `f ⊗ g` on a pair — build [`Alongside`]. Free
+/// (separate inputs; see its docs). Ships as both this free function and
+/// the [`Piece::alongside`] method — the `std::iter::zip` precedent: for a
+/// symmetric operation the free form reads without privileging either arm,
+/// the method form chains. Same combinator through either door.
+/// (Foreclosed rationale: "free because the input type is a pair, not
+/// `self`'s input" — [`MapOk`] is a method with exactly that property,
+/// so the criterion never discriminated; demand and symmetry are the
+/// real sorters.)
 pub fn alongside<A, C, F: Piece<A>, G: Piece<C>>(f: F, g: G) -> Alongside<F, G> {
     Alongside(f, g)
 }
 
 /// **Copairing** `[f, g]` — build [`ConsumeResult`]. Free elimination of a
-/// `Result` (see its docs). A free function because its input is the sum
-/// `Result<A, B>`, not `f`'s input.
+/// `Result` (see its docs). Both doors, like [`alongside`]: this free form
+/// for the symmetric reading, [`Piece::consume_result`] for chains.
 pub fn consume_result<A, B, C, F: Piece<A, Out = C>, G: Piece<B, Out = C>>(
     f: F,
     g: G,
@@ -280,8 +339,16 @@ pub fn consume_result<A, B, C, F: Piece<A, Out = C>, G: Piece<B, Out = C>>(
 /// composable arrow. The newtype exists because a blanket
 /// `impl<F: Fn(A) -> B> Piece<A> for F` would collide under coherence with
 /// every named combinator type below.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Embed<F>(pub F);
+// std's `Map` pattern: `Debug` without an `F: Debug` bound, closure
+// omitted — this is what makes whole pipelines of closures debuggable
+// through the combinators' derived impls.
+impl<F> core::fmt::Debug for Embed<F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Embed").finish_non_exhaustive()
+    }
+}
 impl<A, B, F: Fn(A) -> B> Piece<A> for Embed<F> {
     type Out = B;
     fn run(&self, a: A) -> B {
@@ -301,10 +368,10 @@ impl<A, M: Piece<A>> Piece<A> for &M {
 /// leaves and combinators form a genuine category.
 ///
 /// ```
-/// use affine_cat::base::{Id, Link, Embed, Piece};
+/// use affine_cat::base::{Id, Embed, Piece};
 /// let f = |x: i32| x + 1;
-/// assert_eq!(Link(Id, Embed(f)).run(10), Embed(f).run(10)); // left identity
-/// assert_eq!(Link(Embed(f), Id).run(10), Embed(f).run(10)); // right identity
+/// assert_eq!(Id.link(Embed(f)).run(10), Embed(f).run(10)); // left identity
+/// assert_eq!(Embed(f).link(Id).run(10), Embed(f).run(10)); // right identity
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Id;
@@ -319,8 +386,17 @@ impl<A> Piece<A> for Id {
 /// order — run `self`, then feed its output to `g` (Control.Arrow's `>>>`).
 /// Associativity and the [`Id`] identity laws are definitional (the
 /// free-category laws).
+///
+/// Representation is private; the trait surface is the only door — and
+/// that claim carries its own compile-time witness:
+/// ```compile_fail,E0616
+/// use affine_cat::base::{Embed, Piece};
+/// let l = Embed(|x: i32| x + 1).link(Embed(|x: i32| x * 2));
+/// let _inner = l.0; // error[E0616]: field `0` is private
+/// ```
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Link<F, G>(pub F, pub G);
+pub struct Link<F, G>(F, G);
 impl<A, F: Piece<A>, G: Piece<F::Out>> Piece<A> for Link<F, G> {
     type Out = G::Out;
     fn run(&self, a: A) -> G::Out {
@@ -340,8 +416,9 @@ impl<A, F: Piece<A>, G: Piece<F::Out>> Piece<A> for Link<F, G> {
 /// Bound note: this combinator needs only weakening and exchange, so
 /// **no duplication bound at all** — the bounds on each combinator are
 /// exactly its categorical requirements.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OnFirst<F>(pub F);
+pub struct OnFirst<F>(F);
 impl<A, C, F: Piece<A>> Piece<(A, C)> for OnFirst<F> {
     type Out = (F::Out, C);
     fn run(&self, (a, c): (A, C)) -> Self::Out {
@@ -363,12 +440,11 @@ impl<A, C, F: Piece<A>> Piece<(A, C)> for OnFirst<F> {
 /// bound is [`Unaliased`] — the strong diagonal.
 ///
 /// ```
-/// use affine_cat::base::{DuplicateTo, Link, Embed, Piece};
+/// use affine_cat::base::{Embed, Piece};
 /// // (len &&& uppercase) >>> combine, on a String (which is Unaliased)
-/// let p = Link(
-///     DuplicateTo(Embed(|s: String| s.len()), Embed(|s: String| s.to_uppercase())),
-///     Embed(|(n, s): (usize, String)| format!("{s}/{n}")),
-/// );
+/// let p = Embed(|s: String| s.len())
+///     .duplicate_to(Embed(|s: String| s.to_uppercase()))
+///     .link(Embed(|(n, s): (usize, String)| format!("{s}/{n}")));
 /// assert_eq!(p.run("dia".into()), "DIA/3");
 /// // DuplicateTo is a zero-sized type: the whole pipeline compiles to nothing.
 /// assert_eq!(core::mem::size_of_val(&p), 0);
@@ -381,8 +457,9 @@ impl<A, C, F: Piece<A>> Piece<(A, C)> for OnFirst<F> {
 /// `Unaliased -> Comonoid` later is non-breaking; tightening is not. If
 /// shared-handle fanout turns out to be wanted, the escape is one
 /// widening edit away (or an additional `FanoutShared` combinator).
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DuplicateTo<F, G>(pub F, pub G);
+pub struct DuplicateTo<F, G>(F, G);
 impl<A: Unaliased, F: Piece<A>, G: Piece<A>> Piece<A> for DuplicateTo<F, G> {
     type Out = (F::Out, G::Out);
     fn run(&self, a: A) -> Self::Out {
@@ -395,8 +472,9 @@ impl<A: Unaliased, F: Piece<A>, G: Piece<A>> Piece<A> for DuplicateTo<F, G> {
 /// through. Additive structure needs no duplication bound — the coproduct
 /// adjunction `+ ⊣ Δ` is unconditional in an affine category (weakening
 /// only), the mirror of [`DuplicateTo`]'s conditional `Δ ⊣ ×`.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MapOk<F>(pub F);
+pub struct MapOk<F>(F);
 impl<A, E, F: Piece<A>> Piece<Result<A, E>> for MapOk<F> {
     type Out = Result<F::Out, E>;
     fn run(&self, r: Result<A, E>) -> Self::Out {
@@ -414,8 +492,9 @@ impl<A, E, F: Piece<A>> Piece<Result<A, E>> for MapOk<F> {
 /// wall. The dual, chaining on the `Err` arm, is [`LinkErr`] (std `or_else`).
 ///
 /// The hand-rolled equivalent is `Link(f, Link(MapOk(g), flatten))`.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LinkOk<F, G>(pub F, pub G);
+pub struct LinkOk<F, G>(F, G);
 
 impl<A, B, C, E, F, G> Piece<A> for LinkOk<F, G>
 where
@@ -437,8 +516,9 @@ where
 /// (`Err`). Where [`LinkOk`] chains successes and short-circuits failures,
 /// `LinkErr` chains failures (recovery) and short-circuits successes — the
 /// same arrow with the two arms swapped.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LinkErr<F, G>(pub F, pub G);
+pub struct LinkErr<F, G>(F, G);
 
 impl<A, B, E, X, F, G> Piece<A> for LinkErr<F, G>
 where
@@ -461,8 +541,9 @@ where
 /// diagonal — it is **unconditional** in an affine category (no [`Comonoid`]
 /// bound): a `match` *moves* the value into one branch, copying nothing. This
 /// free-elimination / gated-diagonal asymmetry is exactly what *affine* means.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ConsumeResult<F, G>(pub F, pub G);
+pub struct ConsumeResult<F, G>(F, G);
 impl<A, B, C, F: Piece<A, Out = C>, G: Piece<B, Out = C>> Piece<Result<A, B>>
     for ConsumeResult<F, G>
 {
@@ -477,8 +558,9 @@ impl<A, B, C, F: Piece<A, Out = C>, G: Piece<B, Out = C>> Piece<Result<A, B>>
 
 /// Apply a morphism to the second product component (Strong, mirror of
 /// [`OnFirst`]). No bounds: weakening and exchange only.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OnSecond<F>(pub F);
+pub struct OnSecond<F>(F);
 impl<A, C, F: Piece<A>> Piece<(C, A)> for OnSecond<F> {
     type Out = (C, F::Out);
     fn run(&self, (c, a): (C, A)) -> Self::Out {
@@ -487,8 +569,9 @@ impl<A, C, F: Piece<A>> Piece<(C, A)> for OnSecond<F> {
 }
 
 /// Apply a morphism to the `Err` branch (Choice, mirror of [`MapOk`]).
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MapErr<F>(pub F);
+pub struct MapErr<F>(F);
 impl<A, E, F: Piece<E>> Piece<Result<A, E>> for MapErr<F> {
     type Out = Result<A, F::Out>;
     fn run(&self, r: Result<A, E>) -> Self::Out {
@@ -569,8 +652,9 @@ impl<A, B> Piece<B> for InjectErr<A> {
 /// two halves of the pair — so nothing is copied and no [`Comonoid`] bound
 /// is needed: the tuple is destructured, each half moved into one arm.
 /// Equals `Link(OnFirst(f), OnSecond(g))`.
+#[must_use = "pieces are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Alongside<F, G>(pub F, pub G);
+pub struct Alongside<F, G>(F, G);
 impl<A, C, F: Piece<A>, G: Piece<C>> Piece<(A, C)> for Alongside<F, G> {
     type Out = (F::Out, G::Out);
     fn run(&self, (a, c): (A, C)) -> Self::Out {
@@ -605,6 +689,20 @@ impl<A, C, F: Piece<A>, G: Piece<C>> Piece<(A, C)> for Alongside<F, G> {
 pub trait Absorb<T> {
     /// Absorb one item into the accumulator.
     fn absorb(&mut self, t: T);
+
+    /// Feed every item of `input` in order — the fold eliminator as a
+    /// method (std's `for_each`/`collect` position; see also
+    /// [`crate::data::accumulate`], which additionally hands back a
+    /// finished value). `where Self: Sized` keeps it off the vtable, so
+    /// `&mut dyn Absorb<T>` object-safety is unchanged.
+    fn accumulate<I: IntoIterator<Item = T>>(&mut self, input: I)
+    where
+        Self: Sized,
+    {
+        for t in input {
+            self.absorb(t);
+        }
+    }
 }
 
 // Std collection instances. Deliberately NOT a blanket over `Extend`:
@@ -670,6 +768,13 @@ impl<T> Absorb<T> for Count {
 /// one pass, two outputs (creature_feature's `featurize_x2`, as a lawful
 /// instance). The token is genuinely duplicated, so the [`Comonoid`]
 /// bound sits exactly where the theory puts it.
+///
+/// **Fields are public on purpose** — the one deliberate exception to the
+/// private-representation rule. `Absorb` is a *carrier* trait: the
+/// accumulators are the result, and `let Pair(a, b) = acc` is how you
+/// take them home. Opacity is right exactly when the trait's methods are
+/// the whole observation (`Piece::run`, `Machine::out`); for `Absorb`
+/// they are not, so the fields stay open.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Pair<A, B>(pub A, pub B);
 impl<T: Comonoid, A: Absorb<T>, B: Absorb<T>> Absorb<T> for Pair<A, B> {
@@ -804,6 +909,15 @@ mod tests {
         let c = consume_result(Embed(|x: i32| x), Embed(|_e: &str| -1));
         assert_eq!(c.run(Ok(5)), 5);
         assert_eq!(c.run(Err("e")), -1);
+    }
+
+    #[test]
+    fn pipelines_of_closures_are_debug() {
+        // The std `Map` pattern's payoff: `Embed`'s manual Debug carries
+        // no `F: Debug` bound, so combinator derives make whole
+        // closure pipelines debuggable.
+        let p = Embed(|x: i32| x + 1).link(Embed(|x: i32| x * 2));
+        assert_eq!(format!("{p:?}"), "Link(Embed { .. }, Embed { .. })");
     }
 
     #[test]

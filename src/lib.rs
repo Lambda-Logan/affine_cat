@@ -97,6 +97,17 @@
 //!   legal, so abandonment of a typestate protocol is statically
 //!   invisible; any future `Protocol` module inherits this session-type
 //!   wall.
+//! * **Weakening is free only up to `Drop` effects.** "Any value may be
+//!   dropped" is a *typing* rule; operationally `Drop::drop` is user code
+//!   that runs at the discard, so weakening is unobservable only for
+//!   types with trivial drop glue. The crate both spends and prices this:
+//!   [`cata::ScopeGuard`] does its balancing work *in* `Drop` (the
+//!   panic-path law depends on the effect firing), while the pipeline
+//!   laws' "discarding is free" claims are semantic statements about
+//!   values, exact for `Copy`-ish leaves and true-up-to-drop-effects in
+//!   general. An affine category with observable weakening is where the
+//!   theory honestly lands; the laws quantify over what `out`/`run`
+//!   observe, which drop effects cannot touch.
 //! * **In-place allocation reuse is behavior, not contract** — it rides
 //!   on unstable std specialization internals; this crate states the
 //!   value-level law and pins the reuse with a canary test only.

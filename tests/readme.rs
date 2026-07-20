@@ -2,7 +2,7 @@
 
 #[test]
 fn snippet_quickstart_machines() {
-    use affine_cat::machines::{DuplicateToMachine, Machine};
+    use affine_cat::machines::Machine;
 
     struct Total(u64);
     impl Machine for Total {
@@ -28,7 +28,7 @@ fn snippet_quickstart_machines() {
         }
     }
 
-    let mut stats = DuplicateToMachine(Total(0), Max(0));
+    let mut stats = Total(0).duplicate_to(Max(0));
     for x in [3, 9, 4] {
         stats.update(x);
     }
@@ -37,7 +37,7 @@ fn snippet_quickstart_machines() {
 
 #[test]
 fn snippet_pieces() {
-    use affine_cat::base::{Embed, Piece, PieceExt};
+    use affine_cat::base::{Embed, Piece};
 
     let status_class = Embed(|status: u16| status / 100);
     let is_server_error = Embed(|class: u16| class == 5);
@@ -50,7 +50,7 @@ fn snippet_pieces() {
 
 #[test]
 fn snippet_duplicate_to() {
-    use affine_cat::base::{Embed, Piece, PieceExt};
+    use affine_cat::base::{Embed, Piece};
 
     let p = Embed(|s: String| s.len()).duplicate_to(Embed(|s: String| s.to_uppercase()));
     assert_eq!(p.run("dia".into()), (3, "DIA".into()));
@@ -58,7 +58,7 @@ fn snippet_duplicate_to() {
 
 #[test]
 fn snippet_result_pipelines() {
-    use affine_cat::base::{consume_result, Embed, Piece, PieceExt};
+    use affine_cat::base::{consume_result, Embed, Piece};
 
     let parse = Embed(|s: &str| s.parse::<i64>().map_err(|_| "not a number"));
     let positive = Embed(|n: i64| if n > 0 { Ok(n) } else { Err("not positive") });
@@ -104,14 +104,14 @@ fn snippet_machine_as_sink() {
         }
     }
 
-    let mut ss = Driven(CountIf([b's', b's'], 0));
+    let mut ss = Driven(CountIf(*b"ss", 0));
     ArrayWindows::<2>.for_each(&b"mississippi"[..], |bg| ss.absorb(bg));
     assert_eq!(ss.0.out(), 2);
 }
 
 #[test]
 fn snippet_cps() {
-    use affine_cat::cps::{Embed, Piece, PieceExt};
+    use affine_cat::cps::{Embed, Piece};
     use core::ops::ControlFlow;
 
     struct Each;
@@ -244,7 +244,7 @@ fn readme_block_quickstart() {
 
 #[test]
 fn readme_block_classify() {
-    use affine_cat::base::{Embed, Piece, PieceExt};
+    use affine_cat::base::{Embed, Piece};
 
     let classify =
         Embed(|status: u16| status / 100).link(Embed(|class: u16| matches!(class, 4 | 5)));
@@ -272,7 +272,7 @@ fn readme_block_machine() {
 
 #[test]
 fn readme_block_cata() {
-    use affine_cat::cata::{FoldAlg, Pair};
+    use affine_cat::cata::{pair, FoldAlg};
     use affine_cat_derive::Recursive;
 
     #[derive(Recursive)]
@@ -314,6 +314,6 @@ fn readme_block_cata() {
         Box::new(Expr::Add(Box::new(Expr::Lit(3)), Box::new(Expr::Lit(4)))),
     );
     // one traversal, two algebras — no Clone bound anywhere
-    let (val, depth) = e.fold(&(), &Pair(&Eval, &Depth));
+    let (val, depth) = e.fold(&(), &pair(&Eval, &Depth));
     assert_eq!((val, depth), (9, 2));
 }

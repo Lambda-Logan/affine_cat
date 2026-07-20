@@ -4,21 +4,21 @@
 //! several statistics in a SINGLE PASS — without collecting the parsed
 //! records into an intermediate `Vec`. The three spines each do their job:
 //!
-//! * `base`  — pipeline morphisms parse and classify each line (pure,
-//!             zero-sized, fused at compile time).
-//! * `machines` — Moore machines accumulate running statistics; `DuplicateToTransducer`
-//!             runs several at once over the same stream; `Postmap`
-//!             finalizes their readouts.
+//! * `base` — pipeline morphisms parse and classify each line (pure,
+//!   zero-sized, fused at compile time).
+//! * `machines` — Moore machines accumulate running statistics;
+//!   `DuplicateToTransducer` runs several at once over the same stream;
+//!   `Postmap` finalizes their readouts.
 //! * the seam — `Driven` turns the machine into an `Absorb` sink so a
-//!             `Visit` source can feed it; one pass, many answers.
+//!   `Visit` source can feed it; one pass, many answers.
 //!
 //! The point: the "parse → classify → accumulate several stats at once"
 //! shape is exactly product/coproduct/fanout, and the crate lets us write
 //! it as composition with no allocation between stages.
 
-use affine_cat::base::{Absorb, DuplicateTo, Embed, KeepLeft, Link, Piece};
+use affine_cat::base::{Absorb, Embed, KeepLeft, Piece};
 use affine_cat::data::Visit;
-use affine_cat::machines::{Driven, DuplicateToTransducer, Machine};
+use affine_cat::machines::{duplicate_to_transducer, Driven, Machine};
 use core::ops::ControlFlow;
 
 // ---------- the domain ----------
@@ -138,12 +138,12 @@ fn main() {
     // over each entry (the entry is Copy — hence Unaliased — so the
     // shared-input fanout is sound and cheap). This is the machine
     // applicative: a machine whose readout is the tuple of all three.
-    let stats = DuplicateToTransducer(
+    let stats = duplicate_to_transducer(
         ErrorRate {
             errors: 0,
             total: 0,
         },
-        DuplicateToTransducer(TotalBytes(0), MaxBytes(0)),
+        duplicate_to_transducer(TotalBytes(0), MaxBytes(0)),
     );
 
     // The seam: `Driven` turns that machine into an `Absorb` sink, and the
@@ -156,7 +156,8 @@ fn main() {
     // applicative (Mealy-shaped: it zips outputs as you step), so we read the
     // final statistics off the inner Moore machines directly — each has a
     // pure `out()`.
-    let DuplicateToTransducer(error_rate, DuplicateToTransducer(total_bytes, max_bytes)) = &sink.0;
+    let (error_rate, inner) = sink.0.parts();
+    let (total_bytes, max_bytes) = inner.parts();
     let (errs, total) = error_rate.out();
     let sum = total_bytes.out();
     let max = max_bytes.out();
@@ -169,13 +170,9 @@ fn main() {
 
     // Demonstrate the pure-pipeline side too: a classifier built by
     // composition, showing base's morphisms fuse to a zero-sized value.
-    let classify = Link(
-        DuplicateTo(
-            Embed(|e: Entry| e.status / 100),   // status class (2,4,5,...)
-            Embed(|e: Entry| e.bytes > 10_000), // "large response?"
-        ),
-        KeepLeft, // keep just the class (projection — discards the bool)
-    );
+    let classify = Embed(|e: Entry| e.status / 100) // status class (2,4,5,...)
+        .duplicate_to(Embed(|e: Entry| e.bytes > 10_000)) // "large response?"
+        .link(KeepLeft); // keep just the class (projection — discards the bool)
     assert_eq!(core::mem::size_of_val(&classify), 0); // fused to nothing
     let e = Entry {
         status: 404,

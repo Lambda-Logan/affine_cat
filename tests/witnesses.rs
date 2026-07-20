@@ -1,7 +1,7 @@
 //! The documented numbers, re-earned on every `cargo test` — a stated
 //! measurement that isn't re-verified is a future lie (we committed the
 //! phantom-MSRV version of that sin once; this file is the penance).
-use affine_cat::cata::{FoldAlg, IntoFoldAlg, PairOwned, Rebuild, Thunk};
+use affine_cat::cata::{pair_owned, FoldAlg, IntoFoldAlg, Rebuild, Thunk};
 use affine_cat_derive::Recursive;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
@@ -117,7 +117,7 @@ fn documented_numbers_still_hold() {
     assert_eq!(spine(0, 500).into_fold(&(), &FindOwned(3)), Some(3));
     let alone = FORCED.load(Relaxed);
     FORCED.store(0, Relaxed);
-    let (_copy, f) = spine(0, 500).into_fold(&(), &PairOwned(Rebuild, Find(3)));
+    let (_copy, f) = spine(0, 500).into_fold(&(), &pair_owned(Rebuild, Find(3)));
     assert_eq!(f, Some(3));
     let paired = FORCED.load(Relaxed);
     assert!(alone < 10, "lone search forced {alone}");
@@ -569,11 +569,7 @@ mod coverage_sweep {
                 }
             }
         }
-        fn reduce_blk<'a>(
-            &self,
-            _: &Depths,
-            l: BlkLayer<Self::Out1, Self::Out2>,
-        ) -> Self::Out2 {
+        fn reduce_blk<'a>(&self, _: &Depths, l: BlkLayer<Self::Out1, Self::Out2>) -> Self::Out2 {
             match l {
                 BlkLayer::Leaf(n) => Some(*n),
                 BlkLayer::Group(kids, cond) => {
@@ -604,8 +600,7 @@ mod coverage_sweep {
         assert_eq!(l.into_fold(&(), &Force), 42);
 
         // (2) generic consuming: the 'static owned path runs
-        let g: GT<&'static str> =
-            GT::Fork(Box::new(GT::Tip("a")), Box::new(GT::Tip("b")));
+        let g: GT<&'static str> = GT::Fork(Box::new(GT::Tip("a")), Box::new(GT::Tip("b")));
         assert_eq!(g.into_fold(&(), &JoinG), "(ab)");
 
         // (3) via-form consuming
@@ -730,7 +725,7 @@ mod blanket_scoped_env {
 
 // ===== composition-gap witnesses =====
 mod composition_blankets {
-    use affine_cat::cata::{FoldAlg, Pair};
+    use affine_cat::cata::{pair, FoldAlg};
     use affine_cat_derive::Recursive;
     use std::rc::Rc;
 
@@ -771,7 +766,7 @@ mod composition_blankets {
     #[test]
     fn rc_is_a_borrowed_hole_and_algebras_pair_by_reference() {
         let t = S::Shared(Rc::new(S::Shared(Rc::new(S::Leaf(7)))));
-        let (c, d) = t.fold(&(), &Pair(&Count, &Depth)); // borrowed algebras
+        let (c, d) = t.fold(&(), &pair(&Count, &Depth)); // borrowed algebras
         assert_eq!((c, d), (3, 2));
         let c2 = t.fold(&(), &Count); // originals still owned — reused
         assert_eq!(c2, 3);

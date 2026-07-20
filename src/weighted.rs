@@ -32,12 +32,12 @@ use crate::ringy::Semiring;
 /// read out `a.out() ⊕ b.out()`. Generalizes Boolean union (which is
 /// the `⊕`-product at `S = bool`, where `⊕ = ∨` gives language union).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Sum<A, B>(pub DuplicateToMachine<A, B>);
+pub struct Sum<A, B>(DuplicateToMachine<A, B>);
 
 impl<A, B> Sum<A, B> {
     /// Build from the two component weighted machines.
     pub fn new(a: A, b: B) -> Self {
-        Sum(DuplicateToMachine(a, b))
+        Sum(DuplicateToMachine::new(a, b))
     }
 }
 
@@ -63,12 +63,12 @@ where
 /// read out `a.out() ⊗ b.out()`. Generalizes Boolean intersection (which is
 /// the `⊗`-product at `S = bool`, where `⊗ = ∧` gives intersection).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Prod<A, B>(pub DuplicateToMachine<A, B>);
+pub struct Prod<A, B>(DuplicateToMachine<A, B>);
 
 impl<A, B> Prod<A, B> {
     /// Build from the two component weighted machines.
     pub fn new(a: A, b: B) -> Self {
-        Prod(DuplicateToMachine(a, b))
+        Prod(DuplicateToMachine::new(a, b))
     }
 }
 

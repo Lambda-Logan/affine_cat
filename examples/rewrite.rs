@@ -1,7 +1,7 @@
 //! The transformation family: a constant-folding REWRITE via into_fold.
 //! Payloads are MOVED (the non-Clone Tag proves zero duplication), and
 //! the identity rewrite doubles as an embed check.
-use affine_cat::cata::{FoldAlg, IntoFoldAlg, Pair, PairOwned, Rebuild};
+use affine_cat::cata::{pair, pair_owned, FoldAlg, IntoFoldAlg, Rebuild};
 use affine_cat_derive::Recursive;
 
 pub struct Tag(pub String); // deliberately not Clone
@@ -77,18 +77,18 @@ fn main() {
 
     // MIXED PAIR: rewrite + analysis, ONE consuming traversal, zero dup.
     // The analysis sees the input (size 8 pre-fold), the rewrite consumes.
-    let (folded2, input_size) = expr().into_fold(&(), &PairOwned(ConstFold, Size));
+    let (folded2, input_size) = expr().into_fold(&(), &pair_owned(ConstFold, Size));
     assert_eq!(input_size, 8);
     assert_eq!(folded2.into_fold(&(), &Render), "k:10");
 
     // copy-and-analyze law at runtime: PairOwned(Rebuild, g) = (copy, analysis)
     // nested composition across the owned/borrowed boundary: one pass,
     // one rewrite, two analyses
-    let (folded3, (n1, n2)) = expr().into_fold(&(), &PairOwned(ConstFold, Pair(Size, Size)));
+    let (folded3, (n1, n2)) = expr().into_fold(&(), &pair_owned(ConstFold, pair(Size, Size)));
     assert_eq!((n1, n2), (8, 8));
     assert_eq!(folded3.into_fold(&(), &Render), "k:10");
 
-    let (copy, n) = expr().into_fold(&(), &PairOwned(Rebuild, Size));
+    let (copy, n) = expr().into_fold(&(), &pair_owned(Rebuild, Size));
     assert_eq!(
         (copy.into_fold(&(), &Render), n),
         (expr().into_fold(&(), &Render), 8)

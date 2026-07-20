@@ -257,8 +257,31 @@ impl CommutativeSemiring for Tropical {}
 /// with `zero = 0.0` and `one = 1.0`. Weighted automata over it compute the
 /// **most-likely path** — `+` keeps the better alternative, `*` multiplies
 /// probabilities along a path.
+///
+/// The field is private and [`Viterbi::new`] validating — the one door —
+/// so `NaN` and out-of-range values are unrepresentable and every held
+/// value satisfies the laws' precondition by construction (contrast
+/// [`Tropical`], whose whole `u64` range is lawful and whose field is
+/// therefore public). One caveat survives validation and is priced here
+/// rather than hidden: `*` is IEEE-754 multiplication, so
+/// `⊗`-**associativity holds up to rounding** (ULP-level), exactly on
+/// clean dyadic values. `max` is exact.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Viterbi(pub f64);
+pub struct Viterbi(f64);
+
+impl Viterbi {
+    /// Validate a probability into the semiring: `Some` iff `p` is in
+    /// `[0.0, 1.0]` (which excludes `NaN` — comparisons with `NaN` are
+    /// false).
+    pub fn new(p: f64) -> Option<Viterbi> {
+        (0.0..=1.0).contains(&p).then_some(Viterbi(p))
+    }
+
+    /// The held probability (in `[0.0, 1.0]` by construction).
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
 
 impl Semiring for Viterbi {
     fn zero() -> Viterbi {
@@ -367,6 +390,20 @@ mod tests {
     use super::*;
     use alloc::vec;
 
+    #[test]
+    fn viterbi_constructor_polices_the_domain() {
+        // The [0, 1] precondition is enforced at the only door; NaN is
+        // excluded (NaN fails every range comparison).
+        assert!(Viterbi::new(0.0).is_some());
+        assert!(Viterbi::new(0.5).is_some());
+        assert!(Viterbi::new(1.0).is_some());
+        assert!(Viterbi::new(-0.1).is_none());
+        assert!(Viterbi::new(1.1).is_none());
+        assert!(Viterbi::new(f64::NAN).is_none());
+        assert!(Viterbi::new(f64::INFINITY).is_none());
+        assert_eq!(Viterbi::new(0.25).unwrap().get(), 0.25);
+    }
+
     fn distributes<S: Semiring>(a: S, b: S, c: S) -> bool {
         a.clone().mul(&b.clone().add(&c)) == a.clone().mul(&b).add(&a.mul(&c))
     }
@@ -441,7 +478,7 @@ mod tests {
     fn value_form_is_defaulted() {
         // Every value op is the default over its _assign primitive.
         assert_eq!(2i64.add(&3).mul(&4), 20); // (2+3)*4
-        assert_eq!(true.mul(&false).add(&true), true);
+        assert!(true.mul(&false).add(&true));
     }
 
     #[test]
@@ -463,8 +500,8 @@ mod tests {
 
     #[test]
     fn bool_is_the_recognizer_algebra() {
-        assert_eq!(true.add(&false), true);
-        assert_eq!(true.mul(&false), false);
-        assert_eq!(true.add(&true), true);
+        assert!(true.add(&false));
+        assert!(!true.mul(&false));
+        assert!(true.add(&true));
     }
 }

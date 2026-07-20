@@ -237,7 +237,7 @@ pub fn derive_recursive(input: TokenStream) -> TokenStream {
         .map(|p| p.ident.clone())
         .collect();
     let epb: Vec<_> = ast.generics.type_params().cloned().collect(); // with bounds
-    // inner fns: bare params, ALL bounds in where — one location per param
+                                                                     // inner fns: bare params, ALL bounds in where — one location per param
     let ep_bounds: Vec<_> = ast
         .generics
         .type_params()
@@ -503,12 +503,7 @@ pub fn derive_recursive(input: TokenStream) -> TokenStream {
                         movable = false;
                     }
                     if let Type::Path(tp) = w {
-                        if tp
-                            .path
-                            .segments
-                            .last()
-                            .is_some_and(|s| s.ident == "Thunk")
-                        {
+                        if tp.path.segments.last().is_some_and(|s| s.ident == "Thunk") {
                             borrowable = false;
                         }
                     }
@@ -1294,8 +1289,7 @@ pub fn recursive_family(
                                         vname,
                                         "scope_prev needs a preceding field to draw from",
                                     )
-                                    .to_compile_error()
-                                    .into();
+                                    .to_compile_error();
                                 }
                                 let Shape2::Chain(pc, ps) = &shapes[i - 1].0 else {
                                     return syn::Error::new_spanned(
@@ -1303,8 +1297,7 @@ pub fn recursive_family(
                                         "scope_prev: the preceding field must be a hole \
                                          (its folded value feeds the frame)",
                                     )
-                                    .to_compile_error()
-                                    .into();
+                                    .to_compile_error();
                                 };
                                 let leaf = if *ps == Sort::S1 {
                                     quote!(A::Out1)
@@ -1422,36 +1415,48 @@ pub fn recursive_family(
         }
     }
 
-    let params = |hp: bool, u: [bool; 2], s1: proc_macro2::TokenStream, s2: proc_macro2::TokenStream| {
-        let mut ps: Vec<proc_macro2::TokenStream> = Vec::new();
-        if hp {
-            ps.push(quote!('a));
-        }
-        if u[0] {
-            ps.push(s1);
-        }
-        if u[1] {
-            ps.push(s2);
-        }
-        if ps.is_empty() {
-            quote!()
-        } else {
-            quote!(<#(#ps),*>)
-        }
-    };
-    let gen_layer = |layer: &syn::Ident, variants: &Vec<proc_macro2::TokenStream>, hp: bool, u: [bool; 2]| {
-        let generics = params(hp, u, quote!(S1), quote!(S2));
-        quote! {
-            /// Two-hole pattern functor (generated): hole params carry
-            /// the sorts' results (pruned to the sorts this layer
-            /// actually contains); payloads are borrowed from the tree.
-            #vis enum #layer #generics { #(#variants),* }
-        }
-    };
+    let params =
+        |hp: bool, u: [bool; 2], s1: proc_macro2::TokenStream, s2: proc_macro2::TokenStream| {
+            let mut ps: Vec<proc_macro2::TokenStream> = Vec::new();
+            if hp {
+                ps.push(quote!('a));
+            }
+            if u[0] {
+                ps.push(s1);
+            }
+            if u[1] {
+                ps.push(s2);
+            }
+            if ps.is_empty() {
+                quote!()
+            } else {
+                quote!(<#(#ps),*>)
+            }
+        };
+    let gen_layer =
+        |layer: &syn::Ident, variants: &Vec<proc_macro2::TokenStream>, hp: bool, u: [bool; 2]| {
+            let generics = params(hp, u, quote!(S1), quote!(S2));
+            quote! {
+                /// Two-hole pattern functor (generated): hole params carry
+                /// the sorts' results (pruned to the sorts this layer
+                /// actually contains); payloads are borrowed from the tree.
+                #vis enum #layer #generics { #(#variants),* }
+            }
+        };
     let layer1 = gen_layer(&l1, &layer_variants[0], has_payload[0], uses[0]);
     let layer2 = gen_layer(&l2, &layer_variants[1], has_payload[1], uses[1]);
-    let la1 = params(has_payload[0], uses[0], quote!(Self::Out1), quote!(Self::Out2));
-    let la2 = params(has_payload[1], uses[1], quote!(Self::Out1), quote!(Self::Out2));
+    let la1 = params(
+        has_payload[0],
+        uses[0],
+        quote!(Self::Out1),
+        quote!(Self::Out2),
+    );
+    let la2 = params(
+        has_payload[1],
+        uses[1],
+        quote!(Self::Out1),
+        quote!(Self::Out2),
+    );
     let (arms1, arms2) = (&arms[0], &arms[1]);
     let (tarms1, tarms2) = (&try_arms[0], &try_arms[1]);
     // dedup ScopedEnvWith bounds (multiple scope_prev sites of one sort)

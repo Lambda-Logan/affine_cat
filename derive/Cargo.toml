@@ -1,0 +1,16 @@
+[package]
+name = "affine-cat-derive"
+version = "0.2.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Derive macros for affine-cat: #[derive(Recursive)] and friends."
+repository = "https://github.com/Lambda-Logan/affine_cat"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+affine-cat = { path = "..", version = "0.2.0" }

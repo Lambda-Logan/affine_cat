@@ -44,7 +44,7 @@ assert_eq!(bigrams[0], [b'm', b'i']);
 Pipelines are zero-sized values that fuse by construction:
 
 ```rust
-use affine_cat::base::{Embed, Piece, PieceExt};
+use affine_cat::base::{Embed, Piece};
 
 let classify =
     Embed(|status: u16| status / 100).link(Embed(|class: u16| matches!(class, 4 | 5)));
@@ -76,7 +76,7 @@ Recursion schemes over your own trees, via derive — one traversal, two
 algebras, paired for free because layers are lent, not copied:
 
 ```rust
-use affine_cat::cata::{FoldAlg, Pair};
+use affine_cat::cata::{pair, FoldAlg};
 use affine_cat_derive::Recursive;
 
 #[derive(Recursive)]
@@ -118,7 +118,7 @@ let e = Expr::Add(
     Box::new(Expr::Add(Box::new(Expr::Lit(3)), Box::new(Expr::Lit(4)))),
 );
 // one traversal, two algebras — no Clone bound anywhere
-let (val, depth) = e.fold(&(), &Pair(&Eval, &Depth));
+let (val, depth) = e.fold(&(), &pair(&Eval, &Depth));
 assert_eq!((val, depth), (9, 2));
 ```
 
@@ -156,8 +156,11 @@ Claims in this crate come with their witnesses, in three tiers:
   fold hot path is an inlining fence worth 2× on cheap algebras, not a
   cost.
 
-`./ci.sh` is the executable board: tests, examples, clippy on the
-contributed surface, the Agda corpus, intra-doc links, and the MSRV floor.
+`./ci.sh` is the executable board: tests, examples, crate-wide
+zero-warning clippy, a test run **inside the packaged `.crate` artifact**
+(what a user actually downloads — the 0.1.0 publish shipped a green board
+and a broken download because the board only ever tested the repo), the
+Agda corpus, intra-doc links, and the MSRV floor.
 
 ## Design conventions
 
@@ -170,6 +173,12 @@ contributed surface, the Agda corpus, intra-doc links, and the MSRV floor.
 - **Absences are priced.** When something is deliberately missing (a
   both-consuming pair, a `try` on the consuming fold path, `HolesMove`
   for shared pointers), the doc at the site says so and says why.
+- **Weakening is free up to `Drop`.** "Any value may be dropped" is the
+  affine typing rule; `Drop::drop` is user code that runs at the discard.
+  The crate's laws quantify over what readouts observe (which drop
+  effects cannot touch), and `cata::ScopeGuard` deliberately *spends* the
+  effect — its panic-path balancing law lives in `Drop`. See the Walls
+  section in the crate docs.
 
 ## MSRV and features
 
@@ -181,7 +190,7 @@ MSRV **1.80**, witnessed in both directions (builds on 1.80, fails on
 
 ## Status
 
-`0.1.0`, pre-release, no downstream users yet: breaking changes are
+`0.2.0`, pre-release, no downstream users yet: breaking changes are
 possible and this is the cheapest they will ever be. The consumer feedback
 loop is live — the `cata` module's current shape owes several corrections
 to a downstream compiler front-end, credited in the docs where their

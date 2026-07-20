@@ -72,12 +72,44 @@ pub trait Piece<A: ?Sized, Env: ?Sized = ()> {
         a: &A,
         k: &mut dyn FnMut(&mut Env, &Self::Out) -> ControlFlow<R>,
     ) -> ControlFlow<R>;
+
+    // --- Provided combinator methods (the `Iterator` form; mirrors
+    // [`crate::base::Piece`]). Erasure unaffected: [`PieceDyn`] is the
+    // object-safe face either way. ---
+
+    /// `self` then `g`: every output of `self` feeds `g` — build [`Link`].
+    fn link<G: Piece<Self::Out, Env>>(self, g: G) -> Link<Self, G>
+    where
+        Self: Sized,
+    {
+        Link(self, g)
+    }
+    /// `self` or `g`: both run on the input, outputs concatenated — build
+    /// [`Both`]. Also a free function ([`both`]) for the symmetric reading.
+    fn both<G: Piece<A, Env, Out = Self::Out>>(self, g: G) -> Both<Self, G>
+    where
+        Self: Sized,
+    {
+        Both(self, g)
+    }
+}
+
+/// **Union** `f <+> g` — build [`Both`]. The free-function door for a
+/// symmetric operation (the `std::iter::zip` precedent; see
+/// [`crate::base::alongside`]): neither arm is privileged as receiver.
+pub fn both<A: ?Sized, Env: ?Sized, F, G>(f: F, g: G) -> Both<F, G>
+where
+    F: Piece<A, Env>,
+    G: Piece<A, Env, Out = <F as Piece<A, Env>>::Out>,
+{
+    Both(f, g)
 }
 
 /// Sequential composition — each output of `F` feeds `G`, results stream in
 /// order; the list-arrow `>>>`. The continuation-nesting lives here, once.
+#[must_use = "stages are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Link<F, G>(pub F, pub G);
+pub struct Link<F, G>(F, G);
 
 impl<A: ?Sized, Env: ?Sized, F, G> Piece<A, Env> for Link<F, G>
 where
@@ -97,8 +129,9 @@ where
 
 /// Union — both stages run on the same input, outputs concatenated in order
 /// (HXT's `<+>`). Both must emit the same `Out`.
+#[must_use = "stages are lazy and do nothing unless `run`"]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Both<F, G>(pub F, pub G);
+pub struct Both<F, G>(F, G);
 
 impl<A: ?Sized, Env: ?Sized, F, G> Piece<A, Env> for Both<F, G>
 where
@@ -122,8 +155,15 @@ where
 /// once with `f(a)`. Mirrors [`crate::base::Embed`] (same role,
 /// this category). The closure sees neither `Env` nor the continuation;
 /// env-aware stages implement [`Piece`] directly.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Embed<F>(pub F);
+// `Debug` without an `F: Debug` bound (std's `Map` pattern; mirrors
+// [`crate::base::Embed`]).
+impl<F> core::fmt::Debug for Embed<F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Embed").finish_non_exhaustive()
+    }
+}
 
 impl<A: ?Sized, Env: ?Sized, B, F> Piece<A, Env> for Embed<F>
 where
@@ -154,19 +194,6 @@ impl<A: ?Sized, Env: ?Sized, M: Piece<A, Env>> Piece<A, Env> for &M {
         (*self).run(env, a, k)
     }
 }
-
-/// Method-chaining sugar so pipelines read left-to-right.
-pub trait PieceExt<A: ?Sized, Env: ?Sized = ()>: Piece<A, Env> + Sized {
-    /// `self` then `g`: every output of `self` feeds `g`.
-    fn link<G: Piece<Self::Out, Env>>(self, g: G) -> Link<Self, G> {
-        Link(self, g)
-    }
-    /// `self` or `g`: both run on the input, outputs concatenated.
-    fn both<G: Piece<A, Env, Out = Self::Out>>(self, g: G) -> Both<Self, G> {
-        Both(self, g)
-    }
-}
-impl<A: ?Sized, Env: ?Sized, F: Piece<A, Env>> PieceExt<A, Env> for F {}
 
 /// The erased, object-safe face: [`Piece`] with the break type pinned to
 /// `()`. Obtained by blanket — every `Piece` is a `PieceDyn` for free, so

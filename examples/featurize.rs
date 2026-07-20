@@ -42,7 +42,7 @@ fn main() {
             }
         }
     }
-    let mut ssi = Driven(CountIf([b's', b's'], 0));
+    let mut ssi = Driven(CountIf(*b"ss", 0));
     accumulate_into(&mut ArrayWindows::<2>, &text[..], &mut ssi);
     println!("'ss' occurs {} times", ssi.0.out());
     assert_eq!(ssi.0.out(), 2); // mi-ss-i-ss-ippi

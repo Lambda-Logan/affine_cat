@@ -29,7 +29,7 @@
 //! GC'd `[b]` shares freely. Tree *transforms* (HXT's `processChildren`)
 //! rebuild structure and belong to the functor spine, not to filters.
 
-use affine_cat::cps::{Piece, PieceDyn, PieceExt};
+use affine_cat::cps::{Piece, PieceDyn};
 use core::ops::ControlFlow;
 
 /// A minimal XML node.
