@@ -3,7 +3,7 @@
 //! Graded consuming functors, the lawful in-place story, the box-free
 //! monoidal (`zip`) presentation of Applicative, and **both** stream
 //! encodings — visitor (final) and iterator (initial) — with the boundary
-//! between them priced by theorem rather than discovered by issue tracker.
+//! between them settled by theorem rather than discovered by issue tracker.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -329,13 +329,13 @@ impl<A, B, const N: usize> Zip<A, B> for [A; N] {
 /// welcome. One carrier, two lawful `Zip`s: the structure is a choice,
 /// not a property.
 ///
-/// Vocabulary note (semigroupoids-style honesty): this instance is
+/// Vocabulary note (in the semigroupoids tradition): this instance is
 /// `Apply`, **not** `Applicative` — a lawful `pure` would be the infinite
 /// repetition, which a strict finite carrier cannot represent. The unit is
 /// absent by theorem, not omission.
 pub struct ZipVec<A>(
-    /// Public on purpose (the carrier exception, cf.
-    /// [`crate::base::Pair`]): the wrapper *is* a `Vec` wearing its
+    /// The public field is the interface (the carrier exception, cf.
+    /// [`crate::base::Pair`]): the wrapper *is* a `Vec` under its
     /// second monoidal structure, and `.0` is how the vector goes in and
     /// comes back out.
     pub Vec<A>,
@@ -349,7 +349,7 @@ impl<A, B> Zip<A, B> for ZipVec<A> {
 }
 
 /// Drive a visitor into an accumulator: the counit of the free–forgetful
-/// adjunction made code, and the crate's data↔kernel seam.
+/// adjunction made code — the junction between data and kernel.
 ///
 /// ```
 /// use affine_cat::data::{accumulate, ArrayWindows};
@@ -371,6 +371,36 @@ where
     acc
 }
 
+/// [`accumulate`] with a **one-shot, state-consuming** eliminator: drive
+/// the visitor, then `finish` the accumulator into the result —
+/// `accumulate` is this with `finish = identity`. The shape of
+/// creature_feature's `Accumulates` (`type State` + `finish`), whose
+/// N-seed min-sketch is a shipped instance with `State ≠ Output`.
+///
+/// `finish` is `FnOnce(St) -> A` because it may *move the state out*,
+/// and it is a bare closure rather than a trait because finish carries
+/// **no law**: pairing-then-finishing equals finishing each pass, one
+/// `cong` past the pairing theorem (mechanized: `finish-split` in
+/// `FinishPair.agda`). A trait would pay coherence costs for no
+/// equation.
+///
+/// This is the *extract* grade of the fold eliminator; the
+/// **non-consuming** grade — `Fn(&St)`, callable at every step, the
+/// comonadic readout — is [`crate::machines::readout`], which turns the
+/// same fold into a streaming [`crate::machines::Machine`] (and thereby
+/// gets `scan` with no further code). A finish that consumes its state
+/// has no Moore presentation; the two forms are independent — neither
+/// is defined through the other.
+pub fn accumulate_finish<I, V, St, A>(v: &mut V, input: I, finish: impl FnOnce(St) -> A) -> A
+where
+    V: Visit<I>,
+    St: Absorb<V::Item> + Default,
+{
+    let mut acc = St::default();
+    v.for_each(input, |t| acc.absorb(t));
+    finish(acc)
+}
+
 // ======================= Streams: both encodings =======================
 //
 // A stream of token groups has two presentations:
@@ -381,7 +411,7 @@ where
 // * **initial / iterator**: external iteration, `std::iter::Iterator` and
 //   the machines in [`crate::machines`].
 //
-// **The boundary, priced (this is a theorem, not a preference):**
+// **The boundary (a theorem, not a preference):**
 // concatenation/fanout-shaped combinators compose in the final encoding;
 // **zip-shaped combinators do not** — pairing the k-th element of one
 // push-stream with the (k+gap)-th of another requires suspending a
@@ -390,8 +420,17 @@ where
 // be generalized from `IterFtzr` to `Ftzr` — "it got hairy quick".)
 // Consequently zip/gap-shaped combinators in this crate bound the
 // *initial* side only, and that restriction is a documented wall, not a
-// missing feature. The cheap bridge direction is initial → final
-// (drive the iterator, push its items); the reverse is the expensive one.
+// missing feature. One refinement keeps the wall's scope accurate:
+// gap-SHIFTED pairing of a stream with ITSELF shares one token clock
+// and is not a zip of two producers at all — at machine grade it is a
+// delay register plus the Moore product (mechanized: `GapClock.agda`).
+// The wall is about pairing two INDEPENDENT push-producers. Sequential
+// and fanout composition are NOT behind it: `map`/`filter_map`/`flat_map`
+// (the Process arrow) and `chain` are concat-shaped — every sub-traversal
+// runs to completion inside the outer continuation, no suspension
+// anywhere — and so are free on the final side. The cheap bridge
+// direction is initial → final (`FromIter`: drive the iterator, push its
+// items); the reverse is the expensive one, and is this wall.
 
 /// The final (visitor) encoding of a token-group stream over `Input`.
 ///
@@ -406,11 +445,6 @@ where
 ///   would be the breaking change this crate is designed never to need.
 /// * Implementing zip-shaped combinators over `Visit` — see the boundary
 ///   note above.
-///
-/// # Future directions
-/// * a `FromVisit`-style accumulator trait (the Moore/`Accumulates`
-///   shape) fusing visitation with accumulation, one pass, two outputs.
-/// * initial→final adapter structs for iterator-backed sources.
 ///
 /// **Not object-safe**: `visit<R>` is generic over the break type. A
 /// `ControlFlow<()>`-fixed sub-trait could be erased if needed (deferred).
@@ -446,6 +480,53 @@ pub trait Visit<Input> {
         Self: Sized,
     {
         Chain(self, other)
+    }
+    /// Act on every item — build [`MapItems`]. The covariant `Item`
+    /// action of the `Visit` spine (the cell [`crate::machines`] fills
+    /// with `postmap` and pieces fill by composition). Grade `FnMut`:
+    /// converters may keep scratch, matching `visit`'s own receiver
+    /// rationale. Break-transparent: mapping is continuation
+    /// pre-composition, so the `ControlFlow` skeleton is untouched by
+    /// construction.
+    fn map<B, F: FnMut(Self::Item) -> B>(self, f: F) -> MapItems<Self, F>
+    where
+        Self: Sized,
+    {
+        MapItems(self, f)
+    }
+    /// Act partially on every item, skipping `None`s — build
+    /// [`FilterMapItems`]. The primitive of the arity ladder (`map` is
+    /// `filter_map` with a total closure; `filter` is the identity on
+    /// survivors); shipped separately the way std ships `Map` beside
+    /// `FilterMap` — the restricted forms infer better and carry less.
+    /// The motivating case for partiality: lossy conversion policies (skip the
+    /// window that splits a codepoint rather than panic).
+    fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> FilterMapItems<Self, F>
+    where
+        Self: Sized,
+    {
+        FilterMapItems(self, f)
+    }
+    /// Feed every item to a whole sub-visitor — build [`FlatMap`], the
+    /// **Process arrow** of the `Visit` spine (machines-style `~>`): the
+    /// top of the arity ladder `map ⊂ filter_map ⊂ flat_map`, of which
+    /// the lower rungs are inference-friendly restrictions. Concat-
+    /// shaped, so push-legal by the boundary note above — the sub-visit
+    /// runs to completion inside the outer continuation, no suspended
+    /// producer anywhere (contrast zip, which stays walled). Early exit
+    /// crosses both layers: a `Break` in the continuation stops the
+    /// sub-visit *and* the outer traversal.
+    ///
+    /// For-each over an iterator source is a spelling of this arrow, not
+    /// a separate combinator: `flat_map(FromIter, v)` visits `v` once
+    /// per element of any `IntoIterator` (the free-function form,
+    /// because `FromIter` is input-polymorphic — see [`map_items`]).
+    fn flat_map<W>(self, w: W) -> FlatMap<Self, W>
+    where
+        Self: Sized,
+        W: Visit<Self::Item>,
+    {
+        FlatMap(self, w)
     }
 }
 
@@ -509,10 +590,226 @@ where
     }
 }
 
+/// Covariant item action for [`Visit::map`]. Fusion is definitional in
+/// the push model: `v.map(f).map(g)` and `v.map(|x| g(f(x)))` build the
+/// same continuation.
+#[must_use = "a visitor does nothing until driven"]
+pub struct MapItems<V, F>(V, F);
+
+impl<V: core::fmt::Debug, F> core::fmt::Debug for MapItems<V, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MapItems")
+            .field("visitor", &self.0)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Input, B, V, F> Visit<Input> for MapItems<V, F>
+where
+    V: Visit<Input>,
+    F: FnMut(V::Item) -> B,
+{
+    type Item = B;
+    fn visit<R>(
+        &mut self,
+        input: Input,
+        f: &mut impl FnMut(Self::Item) -> ControlFlow<R>,
+    ) -> ControlFlow<R> {
+        let MapItems(v, g) = self;
+        v.visit(input, &mut |x| f(g(x)))
+    }
+}
+
+/// Partial item action for [`Visit::filter_map`]: `None`s are skipped
+/// (the traversal continues), `Some`s are passed on.
+#[must_use = "a visitor does nothing until driven"]
+pub struct FilterMapItems<V, F>(V, F);
+
+impl<V: core::fmt::Debug, F> core::fmt::Debug for FilterMapItems<V, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FilterMapItems")
+            .field("visitor", &self.0)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Input, B, V, F> Visit<Input> for FilterMapItems<V, F>
+where
+    V: Visit<Input>,
+    F: FnMut(V::Item) -> Option<B>,
+{
+    type Item = B;
+    fn visit<R>(
+        &mut self,
+        input: Input,
+        f: &mut impl FnMut(Self::Item) -> ControlFlow<R>,
+    ) -> ControlFlow<R> {
+        let FilterMapItems(v, g) = self;
+        v.visit(input, &mut |x| match g(x) {
+            Some(y) => f(y),
+            None => ControlFlow::Continue(()),
+        })
+    }
+}
+
+/// The Process arrow for [`Visit::flat_map`]: every outer item becomes
+/// the *input* of the inner visitor, whose items flow to the
+/// continuation. `Break` propagates through both layers.
+#[must_use = "a visitor does nothing until driven"]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlatMap<V, W>(V, W);
+
+impl<Input, V, W> Visit<Input> for FlatMap<V, W>
+where
+    V: Visit<Input>,
+    W: Visit<V::Item>,
+{
+    type Item = W::Item;
+    fn visit<R>(
+        &mut self,
+        input: Input,
+        f: &mut impl FnMut(Self::Item) -> ControlFlow<R>,
+    ) -> ControlFlow<R> {
+        let FlatMap(v, w) = self;
+        v.visit(input, &mut |x| w.visit(x, f))
+    }
+}
+
+/// Free-function forms of the ladder — **unbounded**, unlike the
+/// methods, so they stay inference-transparent for *input-polymorphic*
+/// visitors: [`FromIter`] implements `Visit<I>` for every
+/// `IntoIterator`, so `FromIter.flat_map(…)` cannot select an impl at
+/// the call site (E0283), while `flat_map(FromIter, …)` defers the
+/// choice to the driving fold, where the input pins it. The same
+/// pattern, for the same reason, as [`crate::cata::pair_owned`].
+pub fn map_items<V, F>(v: V, f: F) -> MapItems<V, F> {
+    MapItems(v, f)
+}
+/// Unbounded form of [`FilterMapItems`] — see [`map_items`].
+pub fn filter_map_items<V, F>(v: V, f: F) -> FilterMapItems<V, F> {
+    FilterMapItems(v, f)
+}
+/// Unbounded form of [`FlatMap`] — see [`map_items`]. For-each over an
+/// iterator source is `flat_map(FromIter, v)`.
+pub fn flat_map<V, W>(v: V, w: W) -> FlatMap<V, W> {
+    FlatMap(v, w)
+}
+
+/// Any `IntoIterator` as a [`Visit`] source — the initial→final bridge
+/// in its cheap direction (drive the iterator, push its items; the
+/// boundary note above names this as the direction that costs nothing).
+/// A unit leaf, constructed directly like [`crate::base::Id`]. With
+/// [`flat_map`] it spells for-each: `flat_map(FromIter, v)` runs `v`
+/// once per element.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FromIter;
+
+impl<I: IntoIterator> Visit<I> for FromIter {
+    type Item = I::Item;
+    fn visit<R>(
+        &mut self,
+        input: I,
+        f: &mut impl FnMut(Self::Item) -> ControlFlow<R>,
+    ) -> ControlFlow<R> {
+        for x in input {
+            match f(x) {
+                ControlFlow::Continue(()) => {}
+                br => return br,
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::{format, string::String, vec, vec::Vec};
+
+    #[test]
+    fn ladder_map_filter_map_convert_and_skip() {
+        let data = [1u8, 2, 3, 4];
+        // map: the bigram-to-sum conversion, as a visible stage
+        let sums: Vec<u16> = accumulate(
+            &mut ArrayWindows::<2>.map(|[a, b]: [u8; 2]| a as u16 + b as u16),
+            &data[..],
+        );
+        assert_eq!(sums, vec![3, 5, 7]);
+        // fusion, behaviorally: map∘map = map of the composite
+        let twice: Vec<u16> = accumulate(
+            &mut ArrayWindows::<2>
+                .map(|[a, b]: [u8; 2]| a as u16 + b as u16)
+                .map(|s| s * 10),
+            &data[..],
+        );
+        let fused: Vec<u16> = accumulate(
+            &mut ArrayWindows::<2>.map(|[a, b]: [u8; 2]| (a as u16 + b as u16) * 10),
+            &data[..],
+        );
+        assert_eq!(twice, fused);
+        // filter_map: the lossy-conversion policy — skip, don't panic
+        let evens_only: Vec<u16> = accumulate(
+            &mut ArrayWindows::<2>.filter_map(|[a, b]: [u8; 2]| {
+                let s = a as u16 + b as u16;
+                (s % 2 == 1).then_some(s)
+            }),
+            &data[..],
+        );
+        assert_eq!(evens_only, vec![3, 5, 7]); // all sums here are odd
+    }
+
+    #[test]
+    fn flat_map_is_the_process_arrow_and_breaks_cross_both_layers() {
+        use core::ops::ControlFlow;
+        // the for-each spelling: FromIter.flat_map(v) — sentences to
+        // bigrams, one pass, nested streaming
+        let sentences: [&[u8]; 2] = [b"ab", b"cde"];
+        let bigrams: Vec<[u8; 2]> =
+            accumulate(&mut flat_map(FromIter, ArrayWindows::<2>), sentences);
+        assert_eq!(bigrams, vec![*b"ab", *b"cd", *b"de"]);
+        // break-transparency across BOTH layers: stop at the first bigram
+        // starting with b'c' — the outer iteration must stop too, which
+        // we witness by counting continuation calls.
+        let mut seen = 0usize;
+        let found = flat_map(FromIter, ArrayWindows::<2>).visit(sentences, &mut |w: [u8; 2]| {
+            seen += 1;
+            if w[0] == b'c' {
+                ControlFlow::Break(w)
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert_eq!(found, ControlFlow::Break(*b"cd"));
+        assert_eq!(seen, 2); // "ab", then "cd" — "de" never visited
+    }
+
+    #[test]
+    fn accumulate_finish_moves_state_out_and_splits_over_pairs() {
+        // extract grade: finish consumes the state (moves the Vec out of
+        // a wrapper the readout grade could never unwrap mid-stream)
+        let data = [1u8, 2, 3, 4];
+        let bigram_count: usize =
+            accumulate_finish(&mut ArrayWindows::<2>, &data[..], |v: Vec<[u8; 2]>| v.len());
+        assert_eq!(bigram_count, 3);
+        // accumulate is accumulate_finish with the identity finish:
+        let all: Vec<[u8; 2]> = accumulate(&mut ArrayWindows::<2>, &data[..]);
+        let all2: Vec<[u8; 2]> =
+            accumulate_finish(&mut ArrayWindows::<2>, &data[..], |v: Vec<[u8; 2]>| v);
+        assert_eq!(all, all2);
+        // finish-split (FinishPair.agda), concretely: one fused pass into
+        // a pair, finished componentwise, equals two passes finished
+        // separately. `Pair` is the one-pass fusion; the finishes are the
+        // eliminators.
+        use crate::base::{Count, Pair};
+        let fused = accumulate_finish(
+            &mut ArrayWindows::<2>,
+            &data[..],
+            |Pair(v, c): Pair<Vec<[u8; 2]>, Count>| (v.len(), c.0),
+        );
+        let two_a: Vec<[u8; 2]> = accumulate(&mut ArrayWindows::<2>, &data[..]);
+        let two_b: Count = accumulate(&mut ArrayWindows::<2>, &data[..]);
+        assert_eq!(fused, (two_a.len(), two_b.0));
+    }
 
     #[test]
     fn graded_fmap() {
@@ -601,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn accumulate_is_the_seam() {
+    fn accumulate_bridges_visit_and_absorb() {
         // one pass, two algebras (featurize_x2's shape, lawful):
         use crate::base::{Count, Pair};
         let data = [1u8, 2, 3, 4];

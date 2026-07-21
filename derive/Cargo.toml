@@ -13,4 +13,12 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-affine-cat = { path = "..", version = "0.2.0" }
+# ">=0.1, <0.3" and not "0.2.0": the two crates are mutually dependent
+# (this one uses `cata::{run, Recursor}` at compile time; the main crate
+# dev-depends on this one), and a fresh version of BOTH cannot enter the
+# registry if each requires the other's fresh version — publish deadlock.
+# The range lets this crate publish first against the already-indexed
+# affine-cat (Recursor/run are stable across 0.1 -> 0.2), which then
+# unblocks the main crate's versioned dev-dep. Tighten to a caret req
+# only if a release ever changes the Recursor surface.
+affine-cat = { path = "..", version = ">=0.1, <0.3" }

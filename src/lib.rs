@@ -37,7 +37,7 @@
 //!   lenses-by-reborrow.
 //! * [`data`] — polynomials as *containers*: graded functors, lawful
 //!   in-place, monoidal `Zip`, and both stream encodings with the
-//!   final/initial boundary priced.
+//!   final/initial boundary settled by theorem.
 //! * [`machines`] — polynomials as *interfaces*: Moore primitive, Mealy
 //!   adapters, `Par`/`Pipe`/`Feedback` wiring with laws by
 //!   construction.
@@ -68,12 +68,55 @@
 //!   `examples/walls.rs`.
 //!
 //! The two spines are the two roles of the polynomial-functor picture
-//! (positions/directions vs interfaces/dynamics); the seam between them —
+//! (positions/directions vs interfaces/dynamics); the crossing between them —
 //! the composition product ⊳ — is a named wall, below.
+//!
+//! ## The grid — shapes × encodings
+//! One polynomial shape recurs across the spines in each spine's
+//! calling convention; the crate is that grid, filled where a customer
+//! exists, with the reason stated where empty. Columns: pure per-token arrows
+//! ([`base::Piece`]), final/push streams ([`data::Visit`]),
+//! initial/stepped streams ([`machines`]). Sinks and their eliminators
+//! appear as the eliminator row.
+//!
+//! | shape | piece | `Visit` (final) | machine (initial) |
+//! |---|---|---|---|
+//! | leaf / source | `Id`, `Embed` | `FromIter` | `Echo`, `from_fn` |
+//! | map | `link` + `Embed` | `map` (`filter_map` is the primitive) | `premap` / `postmap` |
+//! | windows | — (stateless grade) | `ArrayWindows` | *empty*: stays downstream until a streaming customer exists |
+//! | fanout / pairing | `duplicate_to` (comonoid-gated) | `chain` (concat) | `duplicate_to` + `Delay`; gap = shift, not zip (`GapClock.agda`) |
+//! | fanin | `consume_result` | — | `consume_result_transducer` |
+//! | Kleisli / Process | `link_ok` | `flat_map` | `pipe` |
+//! | eliminators | `run` | `accumulate` / `accumulate_finish` | `out` / `run_history` / `scan`; `readout` bridges sink→machine |
+//! | zip (two producers) | n/a (per-token) | **walled** (see [`data`]'s boundary note) | Tee, deferred — variable-rate only |
+//!
+//! Cells left empty, each with its reason (recorded so the refusals are
+//! argued with rather than re-proposed):
+//! * **final→initial bridge** (drive a `Visit` as an `Iterator`):
+//!   requires suspending the producer — the zip wall itself. The cheap
+//!   direction ([`data::FromIter`]) is shipped; the expensive one is the
+//!   wall.
+//! * **raw comonadic `duplicate` on machines**: a per-step machine
+//!   clone — allocation the signature does not admit to. The useful part
+//!   survives as [`machines::Machine::scan`]; the full map lives in
+//!   `MooreComonad.agda`, where duplication costs nothing.
+//! * **`premap` on `Absorb`** (the contravariant sink action): subsumed —
+//!   sources carry `map`, so mapping-into-the-sink duplicates
+//!   [`data::Visit::map`] with worse inference.
+//! * **a reified applicative `Fold` struct**: its combine is already
+//!   [`base::Pair`] + [`data::accumulate_finish`] (mechanized:
+//!   `finish-split` in `FinishPair.agda`); a struct would add ergonomics,
+//!   not power.
+//! * **an additive-monoid stratum under [`ringy::Semiring`]**: no shipped
+//!   operation needs less than the tower's floor; insert the stratum when
+//!   one does, not before.
+//! * **`VisitDyn`** (node-grade erasure): observed erasure demand is
+//!   whole-pipeline grade (`Arc<dyn Fn>` downstream); deferred until
+//!   node-grade demand exists.
 //!
 //! ## Walls — what this crate cannot say, and why
 //! Stated up front because every language port makes concessions; the sin
-//! is making them without a receipt.
+//! is making them without saying so.
 //!
 //! * **No HKT tower.** Expressibility is not the wall — brands
 //!   (defunctionalized constructors) encode it, and even functor
@@ -100,13 +143,14 @@
 //! * **Weakening is free only up to `Drop` effects.** "Any value may be
 //!   dropped" is a *typing* rule; operationally `Drop::drop` is user code
 //!   that runs at the discard, so weakening is unobservable only for
-//!   types with trivial drop glue. The crate both spends and prices this:
+//!   types with trivial drop glue. The crate both relies on this and
+//!   documents it:
 //!   [`cata::ScopeGuard`] does its balancing work *in* `Drop` (the
 //!   panic-path law depends on the effect firing), while the pipeline
 //!   laws' "discarding is free" claims are semantic statements about
 //!   values, exact for `Copy`-ish leaves and true-up-to-drop-effects in
-//!   general. An affine category with observable weakening is where the
-//!   theory honestly lands; the laws quantify over what `out`/`run`
+//!   general. An affine category with observable weakening is what the
+//!   theory supports; the laws quantify over what `out`/`run`
 //!   observe, which drop effects cannot touch.
 //! * **In-place allocation reuse is behavior, not contract** — it rides
 //!   on unstable std specialization internals; this crate states the
@@ -118,8 +162,13 @@
 //! * **Tee/Wye** (demand-driven two-input machines): the initial-encoding
 //!   fix to the visitor-zip wall — the machine's readout includes which
 //!   input it wants next (readiness, in async terms; Kmett's `Tee`, in
-//!   machines terms). The largest deferred design; unblocks gap-grams
-//!   over machines.
+//!   machines terms). The largest deferred design. Scope, sharpened by
+//!   the clock distinction: Tee is for two legs consuming at
+//!   **different rates**. A gap-gram is not that — both legs share the
+//!   token clock, so it is a *shift* of one stream, solved today by a
+//!   delay register plus the Moore product (mechanized: `gap-pair` in
+//!   `GapClock.agda` — one pass, one input, no suspended producer).
+//!   What stays blocked on Tee is variable-rate wiring.
 //! * **Plan/builder surface** (v1.0): a macro compiling await/yield-style
 //!   plans to the combinator types — the async/await arc and Kmett's
 //!   `construct`, converging.
@@ -135,9 +184,13 @@
 //!   over `Zipped`.
 //! * **`brands` module**: ⊳-objects (functor composition) on stable via
 //!   defunctionalized constructors; opt-in, annotation-taxed.
-//! * **`LendingMoore`**: GAT outputs; viable today at a `'static` +
-//!   HRTB-ceremony tax (rust-lang/rust#87479); blanket-embeds the owned
-//!   trait when added.
+//! * **`LendingMoore`**: the comonoid on `&'a T` made nameable — not
+//!   GAT sugar. Borrowed data is the canonical comonoid (shared reads
+//!   *are* lawful copies), and it is exactly the object the machine
+//!   layer cannot currently speak (the `Freeze` wall in
+//!   [`base::Unaliased`]). GAT outputs are the mechanism; viable today
+//!   at a `'static` + HRTB-ceremony tax (rust-lang/rust#87479);
+//!   blanket-embeds the owned trait when added.
 //! * **async-machine tier** (`Pin<&mut Self>` stepping): the
 //!   address-sensitive fragment of [`machines::Machine`]. Futures are its
 //!   motivating instance — a future is a machine whose `update` requires

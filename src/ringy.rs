@@ -258,11 +258,12 @@ impl CommutativeSemiring for Tropical {}
 /// **most-likely path** — `+` keeps the better alternative, `*` multiplies
 /// probabilities along a path.
 ///
-/// The field is private and [`Viterbi::new`] validating — the one door —
+/// The field is private and [`Viterbi::new`] validating — the only
+/// constructor —
 /// so `NaN` and out-of-range values are unrepresentable and every held
 /// value satisfies the laws' precondition by construction (contrast
 /// [`Tropical`], whose whole `u64` range is lawful and whose field is
-/// therefore public). One caveat survives validation and is priced here
+/// therefore public). One caveat survives validation and is stated here
 /// rather than hidden: `*` is IEEE-754 multiplication, so
 /// `⊗`-**associativity holds up to rounding** (ULP-level), exactly on
 /// clean dyadic values. `max` is exact.
@@ -392,7 +393,7 @@ mod tests {
 
     #[test]
     fn viterbi_constructor_polices_the_domain() {
-        // The [0, 1] precondition is enforced at the only door; NaN is
+        // The [0, 1] precondition is enforced at the only constructor; NaN is
         // excluded (NaN fails every range comparison).
         assert!(Viterbi::new(0.0).is_some());
         assert!(Viterbi::new(0.5).is_some());

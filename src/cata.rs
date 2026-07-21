@@ -15,8 +15,8 @@
 //!   the *unfolded* node plus recurse-continuations, environment and
 //!   borrowed node handed together. This is [`crate::cps::Piece`]'s
 //!   continuation idiom pointed down the tree instead of along the
-//!   pipeline. Object-safe, **no GATs** — the "GAT costs `dyn`" line the
-//!   deferral priced does not apply to this face at all.
+//!   pipeline. Object-safe, **no GATs** — the "GAT costs `dyn`" cost in
+//!   the deferral note does not apply to this face at all.
 //! * The *bracketed* pattern (per-IR code; see the module example) — the
 //!   lawful view: a per-(IR, Env) scope discipline (descend/ascend with a
 //!   moved frame, so unbalanced scopes are unrepresentable) wrapped around
@@ -51,7 +51,7 @@
 //! `refold` = [`Thunk`] holes: the coalgebra lives in the data, and
 //! deforestation is measured, not assumed. `embed` = [`RecursiveOwned`],
 //! with `cata embed = id` as `reflection` and [`Rebuild`]. What he ships
-//! that this module deliberately does not: the distributive-law tower
+//! that this module does not attempt: the distributive-law tower
 //! (`gcata`..`zygoHistoPrepro`) — reachable here as user code over
 //! [`Recursor`], named when a consumer names it first.
 //!
@@ -122,7 +122,7 @@
 //!   `dyn` exactly, so the mechanism is the CALL FENCE: the virtual
 //!   call stops LLVM from partially unrolling the recursion into
 //!   i-cache bloat, and erasing it removes the fence. The `dyn` in the
-//!   `Holes` family is therefore performance-load-bearing, not debt —
+//!   `Holes` family is therefore a performance requirement, not debt —
 //!   the opposite of the intuition that demanded the benchmark, which
 //!   is why the benchmark was demanded.
 //!
@@ -161,9 +161,9 @@
 //! `try` variant; short-circuits live on the borrowed drivers today.
 //!
 //! # Walls and deferred
-//! * [`Recursor2`] hardcodes arity 2 on purpose: arity-*n* is indexed
+//! * [`Recursor2`] hardcodes arity 2: arity-*n* is indexed
 //!   families — the first step up the HKT tower, out of scope with the
-//!   crate-level receipt. A third mutually-recursive sort costs one more
+//!   crate-level evidence. A third mutually-recursive sort costs one more
 //!   trait, written by hand, when a consumer brings one.
 //! * Unfolds as EXPLICIT API (`ana : Coalg -> Seed -> Tree`) remain
 //!   deferred — but hylo itself already shipped, internalized: a
@@ -229,7 +229,7 @@ where
 /// Open design gap: absorption/short-circuiting is single-sorted only.
 /// A bubbled value has one type; crossing the `Out1`/`Out2` boundary
 /// needs either unified outputs or an `Either`-shaped break channel —
-/// undesigned, deliberately, until a two-sorted consumer needs it.
+/// left undesigned until a two-sorted consumer needs it.
 pub trait Recursor2<N1: ?Sized, N2: ?Sized, Env: ?Sized> {
     /// The fold's result at sort 1.
     type Out1;
@@ -376,7 +376,7 @@ pub trait Hole<T> {
 }
 
 /// Borrowed access to children: the analysis family's capability.
-/// [`Thunk`] deliberately does NOT implement this — borrowed forcing was
+/// [`Thunk`] does NOT implement this — borrowed forcing was
 /// removed because `&self` cannot speak an affine effect: it produced
 /// husks that type-checked as reusable and panicked on refold. Codata
 /// folds live on the consuming path, where a second fold is `E0382`.
@@ -417,7 +417,7 @@ pub trait Holes<T>: Hole<T> {
 /// * the arena is read-only here (`&Ar`); an impl must not observe
 ///   mutation it cannot see.
 ///
-/// `try_map_ref_in` is deliberately absent: it is `map_ref_until_in` at
+/// `try_map_ref_in` is absent: it is `map_ref_until_in` at
 /// `B = U`, and this trait ships the general primitive only.
 /// (`Ar = ()` default per house style: [`crate::cps::Piece`] established
 /// env-parametrization-with-unit-default in this crate before this trait
@@ -517,7 +517,7 @@ deref_holes! { [T] alloc::sync::Arc<T> }
 deref_holes! { [T, F: FnOnce() -> T] std::sync::LazyLock<T, F> }
 
 /// Consuming access to children: the capability a rewrite needs and a
-/// shared pointer cannot grant. `Rc`/`Arc`/`LazyCell` deliberately do NOT
+/// shared pointer cannot grant. `Rc`/`Arc`/`LazyCell` do NOT
 /// implement this — the type system, not a doc note, is what says "you
 /// cannot consume shared structure." For [`Thunk`] this makes single-
 /// forcing STATIC: `map_move` takes the thunk by value, and since borrowed
@@ -632,7 +632,7 @@ impl<T> HolesMove<T> for Thunk<T> {
 /// but wraps only at `'static` (an already-forced value posing as a
 /// thunk must own its captures); `LazyCell` does neither (no pre-forced
 /// constructor exists — `Deref`'s memoization contract again). `Deref`
-/// deliberately implies none of this: reading says nothing about
+/// implies none of this: reading says nothing about
 /// building, so `deref_holes!` does not generate it.
 // # Laws (HolesWrap) — the construction contract
 // * shape faithfulness: `wrap(m)` produces a container whose shape is
@@ -767,7 +767,7 @@ impl<T> ScopedEnv for alloc::collections::VecDeque<T> {
 /// payload. This is the resolver pattern: `#[recursive(scope_prev)]` in a
 /// family marks a hole whose scope is fed by what came just before it in
 /// declaration order (order is contract). Chosen over interior-mutable
-/// envs deliberately: algebras keep reading `&Env`, and no affine effect
+/// envs because algebras keep reading `&Env`, and no affine effect
 /// is laundered through a shared borrow — the husk lesson, applied.
 pub trait ScopedEnvWith<I: ?Sized>: ScopedEnv {
     /// Enter a scope whose frame is built from `info`.
@@ -834,18 +834,18 @@ impl<'e, E: ScopedEnv + ?Sized> Drop for ScopeGuard<'e, E> {
 /// the analysis, in one pass. Every rewrite+analysis pair is a
 /// perturbation of it.
 ///
-/// A both-consuming pair (two transformations, one pass) is deliberately
-/// absent: both algebras would want the owned payloads, so the pair
+/// A both-consuming pair (two transformations, one pass) is absent by
+/// decision: both algebras would want the owned payloads, so the pair
 /// must duplicate them — the [`crate::base::Comonoid`] toll this module
 /// exists to dodge. Pay it explicitly instead: clone the tree, or run
 /// two passes. (The consistent future shape, if a consumer names it, is
-/// a pair GATED on payload `Comonoid` — priced duplication, the house
-/// pattern — not a refusal.)
+/// a pair GATED on payload `Comonoid` — duplication with its cost in
+/// the bound, the house pattern — not a refusal.)
 #[must_use = "an algebra does nothing until a tree is folded with it"]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PairOwned<F, G>(F, G);
 
-/// Free-function door for [`PairOwned`] — **unbounded**, unlike
+/// Free-function form of [`PairOwned`] — **unbounded**, unlike
 /// [`IntoFoldAlg::pair_owned`], so it stays inference-transparent: a
 /// tree-polymorphic algebra like [`Rebuild`] can be paired here without
 /// pinning `R`/`Env` at the construction site (the method form must
@@ -1040,7 +1040,7 @@ pub struct Thunk<T>(core::cell::Cell<Option<alloc::boxed::Box<dyn FnOnce() -> T>
 
 impl<T> core::fmt::Debug for Thunk<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // deliberately opaque: peeking would force or reveal consumption
+        // opaque by design: peeking would force or reveal consumption
         f.write_str("Thunk(..)")
     }
 }
@@ -1205,7 +1205,7 @@ impl<R: RecursiveOwned + ?Sized, Env: ?Sized, A: IntoFoldAlg<R, Env>> IntoFoldAl
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AtAny<F>(F);
 
-/// Free-function door for [`AtAny`] — unbounded, inference-transparent
+/// Free-function form of [`AtAny`] — unbounded, inference-transparent
 /// (see [`pair_owned`]).
 pub fn at_any<F>(f: F) -> AtAny<F> {
     AtAny(f)
@@ -1234,7 +1234,7 @@ where
 /// # Law
 /// `fold(Pair(f, g)) = (fold(f), fold(g))` — unconditionally, because
 /// [`FoldAlg`] cannot touch the environment (Agda: `bananaV`/`bananaR`;
-/// and `pair-not-banana` for why the restriction is load-bearing).
+/// and `pair-not-banana` for why the restriction is required).
 ///
 /// This concept exists at three grades in this crate, with the
 /// duplication toll placed exactly where each grade forces it:
@@ -1248,7 +1248,7 @@ where
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pair<F, G>(F, G);
 
-/// Free-function door for [`Pair`] — unbounded (see [`pair_owned`] for
+/// Free-function form of [`Pair`] — unbounded (see [`pair_owned`] for
 /// why the free forms exist beside the methods: inference transparency
 /// for tree-polymorphic algebras, plus the symmetric reading).
 pub fn pair<F, G>(f: F, g: G) -> Pair<F, G> {

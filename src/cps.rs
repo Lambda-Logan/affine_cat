@@ -42,7 +42,7 @@
 //! `Env = Arena`. See `examples/xml_filters.rs` for the former and this
 //! module's `env_threads_through_continuation` test for the latter.
 //!
-//! What stays outside, deliberately: a *composite* borrowed output
+//! What stays outside: a *composite* borrowed output
 //! (`type Out<'a>` — a struct of references into the input) needs a lending
 //! GAT, which forfeits `dyn` — the same wall as [`crate::data::MapMut`].
 //! This module keeps `Out: ?Sized` non-generic so the erased face exists;
@@ -94,7 +94,7 @@ pub trait Piece<A: ?Sized, Env: ?Sized = ()> {
     }
 }
 
-/// **Union** `f <+> g` — build [`Both`]. The free-function door for a
+/// **Union** `f <+> g` — build [`Both`]. The free-function form of a
 /// symmetric operation (the `std::iter::zip` precedent; see
 /// [`crate::base::alongside`]): neither arm is privileged as receiver.
 pub fn both<A: ?Sized, Env: ?Sized, F, G>(f: F, g: G) -> Both<F, G>

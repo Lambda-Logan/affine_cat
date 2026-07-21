@@ -131,14 +131,14 @@ every board.
 |---|---|
 | `base` | The affine core: `Comonoid`/`Unaliased` (the gated diagonal), the free pipeline category (`Piece`, `Link`, `DuplicateTo`, `ConsumeResult`, …), `Absorb` sinks, round-trip laws, `lens` |
 | `cps` | The same pipeline, push-encoded: environment-threaded stages with early exit; the mutate-XOR-borrow law lives in the signature |
-| `data` | Graded functors (`MapMut`/`MapOnce` — closure grade = comonoid requirement on captures), box-free `Zip`/`Pointed`, final-encoding `Visit` |
-| `machines` | Moore (`Machine`) and Mealy (`Transducer`) with the embedding law-forced; products, pipes, feedback-as-trace, `Driven` sinks, `run_history` |
+| `data` | Graded functors (`MapMut`/`MapOnce` — closure grade = comonoid requirement on captures), box-free `Zip`/`Pointed`, final-encoding `Visit` with its arrow ladder (`map`/`filter_map`/`flat_map`, `FromIter` sources) and eliminators (`accumulate`/`accumulate_finish`) |
+| `machines` | Moore (`Machine`) and Mealy (`Transducer`) with the embedding law-forced; products, pipes, feedback-as-trace, `Driven` sinks and `readout` folds (the section–retraction pair), `run_history`/`scan` |
 | `ringy` | The weight algebra: a `Semiring` tower with `&mut`-native primitives; `bool`, `Tropical`, `Viterbi`, `Gf2`, `Poly` |
 | `weighted` | `Sum` (`⊕`) and `Prod` (`⊗`) over machines — `DuplicateToMachine` plus a semiring gate |
 | `cata` | Recursion schemes: borrowed and consuming folds via `#[derive(Recursive)]`, scoped envs with Drop-guard balance, absorbing-carrier short-circuits, mutual recursion, codata thunks, arena access (`HolesIn`) |
 | `affine-cat-derive` | `#[derive(Recursive)]` and `#[recursive_family]`; the type classifier folds `syn`'s AST with the crate's own `Recursor` |
 
-## Law-first, receipts attached
+## Law-first, evidence attached
 
 Claims in this crate come with their witnesses, in three tiers:
 
@@ -153,8 +153,11 @@ Claims in this crate come with their witnesses, in three tiers:
 - **Measured** (`benches/`): performance claims are benchmarked before
   they justify design. `benches/dyn_fence.rs` is the standing example —
   it cancelled a planned migration by showing the `dyn` closure in the
-  fold hot path is an inlining fence worth 2× on cheap algebras, not a
-  cost.
+  fold hot path is an inlining fence *worth* something on cheap
+  algebras, not a cost. The magnitude depends on the toolchain, so the
+  bench is the claim and recorded figures are snapshots: the 0.1.0
+  artifact records 2×; rustc 1.97 measures ~1.5× on the cheap algebra
+  and near-parity on the mixed one, same direction. Re-run it on yours.
 
 `./ci.sh` is the executable board: tests, examples, crate-wide
 zero-warning clippy, a test run **inside the packaged `.crate` artifact**
@@ -164,21 +167,21 @@ Agda corpus, intra-doc links, and the MSRV floor.
 
 ## Design conventions
 
-- **Surface earns its place.** Machinery ships when a consumer names it;
+- **Surface is demand-driven.** Machinery ships when a consumer names it;
   speculative tiers live in comments with restoration recipes (see the
   removed-tiers notes in `ringy` and the `dfa` epitaph in `lib.rs`).
 - **Foreclosed alternatives are documented.** Most modules carry
   "Foreclosed" sections recording rejected designs and why — the map of
   where the walls are is part of the product.
-- **Absences are priced.** When something is deliberately missing (a
+- **Absences are explained.** When something is missing by design (a
   both-consuming pair, a `try` on the consuming fold path, `HolesMove`
   for shared pointers), the doc at the site says so and says why.
 - **Weakening is free up to `Drop`.** "Any value may be dropped" is the
   affine typing rule; `Drop::drop` is user code that runs at the discard.
   The crate's laws quantify over what readouts observe (which drop
-  effects cannot touch), and `cata::ScopeGuard` deliberately *spends* the
-  effect — its panic-path balancing law lives in `Drop`. See the Walls
-  section in the crate docs.
+  effects cannot touch), and `cata::ScopeGuard` *relies* on the effect —
+  its panic-path balancing law lives in `Drop`. See the Walls section in
+  the crate docs.
 
 ## MSRV and features
 

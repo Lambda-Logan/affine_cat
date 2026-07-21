@@ -126,6 +126,13 @@ pub trait Machine {
     }
     /// The Moore product: both machines see every input — build
     /// [`DuplicateToMachine`] (pays [`crate::base::Unaliased`] at use).
+    ///
+    /// The `Unaliased` bill shapes pipelines over borrowed token groups:
+    /// `&[T]` windows are not `Unaliased` (the `Freeze` wall, see
+    /// [`crate::base::Unaliased`]), so the product cannot sit downstream
+    /// of a borrowing windower. The discipline that recovers every such
+    /// pipeline: put the diagonal **before** the borrow — duplicate the
+    /// scalar tokens (all `Unaliased` leaves), window on each leg after.
     fn duplicate_to<N>(self, n: N) -> DuplicateToMachine<Self, N>
     where
         Self: Sized,
@@ -143,6 +150,29 @@ pub trait Machine {
             self.update(i);
         }
         self.out()
+    }
+    /// The **running readout**: lazily yield `out()` before any input and
+    /// after every `update` — `history.len() + 1` items, the last equal
+    /// to [`Machine::run_history`] over the same history (mechanized:
+    /// `scan-last` in `MooreComonad.agda`).
+    ///
+    /// Comonadically, that sentence is the entire method: a Moore
+    /// machine is a comonad (extract = `out`, duplicate = relabel each
+    /// state by its own subtree — laws `counit-l`/`counit-r`/`coassoc`
+    /// in `MooreComonad.agda`), and `scan` is the extract-image of the
+    /// duplicate orbit (`dup-tracks`). The raw `duplicate` is *not*
+    /// exposed: in Rust it would be a per-step machine clone — an
+    /// allocation the signature does not admit to — so the crate ships
+    /// the part of it that is useful and leaves the rest in the model.
+    fn scan<I: IntoIterator<Item = Self::In>>(&mut self, history: I) -> Scan<'_, Self, I::IntoIter>
+    where
+        Self: Sized,
+    {
+        Scan {
+            m: self,
+            input: history.into_iter(),
+            primed: false,
+        }
     }
 }
 
@@ -263,13 +293,13 @@ impl<M: Machine> Machine for &mut M {
     }
 }
 
-// Note: `&mut M: Transducer` is deliberately absent — it would overlap the
+// Note: `&mut M: Transducer` is left out — it would overlap the
 // `Moore ⊂ Mealy` blanket (`&mut M` where `M: Machine` matches both). The
 // `&mut M: Machine` impl above already yields a transducer via that
 // embedding, so borrow-stepping is available without the conflicting impl.
 /// The canonical embedding Moore ⊂ Mealy: `step = update; out`.
 ///
-/// # Foreclosure (deliberate, priced)
+/// # Foreclosure
 /// A blanket impl is semver-permanent and prevents any type from
 /// implementing the primitive and a *different* `Transducer` by hand. Accepted
 /// because the embedding is law-forced — any other `Transducer` on a Moore
@@ -323,7 +353,7 @@ where
 /// one since 1.0 in `Hasher` (accumulate via `&mut self`, read via
 /// `&self`), which is the shape [`crate::base::Absorb`] generalizes.
 ///
-/// A blanket `impl<H: Hasher> Machine for H` is deliberately avoided: it
+/// A blanket `impl<H: Hasher> Machine for H` is avoided: it
 /// would foreclose every other `Machine` impl on any `Hasher` type. The
 /// newtype is the coherent adapter.
 #[cfg(feature = "std")]
@@ -361,7 +391,8 @@ impl<H: std::hash::Hasher> Machine for Hashing<H> {
 /// # Panics
 /// Never, on well-formed tables: see the `SAFETY(panic-free)` note on
 /// [`TableMachine::update`]. Malformed tables are **unrepresentable**: the
-/// validating [`TableMachine::new`] is the only door (fields are private),
+/// validating [`TableMachine::new`] is the only constructor (fields are
+/// private),
 /// so every constructed machine satisfies the shape invariant and `update`
 /// cannot index out of bounds — a malformed-table panic class is excluded
 /// by construction, not documented around.
@@ -399,7 +430,7 @@ impl<'t> TableMachine<'t> {
     /// shape: `stride > 0`, at least one state, `transitions.len() ==
     /// accepting.len() * stride`, and every transition target a valid
     /// state id. Returns `None` on any violation — the malformed-table
-    /// panic class is unrepresentable through this door.
+    /// panic class cannot be built through this constructor.
     pub fn new(transitions: &'t [u32], accepting: &'t [bool], stride: usize) -> Option<Self> {
         let nstates = accepting.len();
         let shape_ok = stride > 0
@@ -509,6 +540,108 @@ impl<M, N> Par<M, N> {
 ///
 /// # Law
 /// Associativity of piping holds by construction: `Pipe(Pipe(a,b),c)` and
+/// A readout-fold as a [`Machine`]: an [`crate::base::Absorb`]
+/// accumulator plus a **non-consuming** readout `Fn(&V) -> B`. This is
+/// the Absorb spine's embedding into Moore — the direction opposite
+/// [`Driven`], and the two compose as a definitional section–retraction
+/// (mechanized: `build-tracks`/`retract` in `FoldMooreRetract.agda`):
+/// [`Driven`] forgets exactly the readout, and the dynamics reached are
+/// readout-independent. [`Hashing`] is this shape hand-rolled —
+/// `Hasher::write` the absorb, `Hasher::finish` the readout.
+///
+/// The readout grade is `Fn(&V)` by design: callable at every step
+/// (so [`Machine::scan`] works on any fold, free), reading through `&` —
+/// the comonadic *extract*. The one-shot, state-consuming eliminator is
+/// the other grade: [`crate::data::accumulate_finish`], `FnOnce(V)`. A
+/// fold whose finish must move its state out is a lawful terminal fold
+/// that is not a Moore object — the two forms are not interchangeable.
+///
+/// The input type `T` rides as a phantom because accumulators absorb at
+/// several types (`String` absorbs both `char` and `&str`); the phantom
+/// pins the machine's `In` where fields alone could not, keeping the
+/// `Machine` impl coherent.
+#[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
+pub struct Readout<T, V, F> {
+    acc: V,
+    out: F,
+    _in: core::marker::PhantomData<fn(T)>,
+}
+
+/// Free-function form of [`Readout`] — unbounded, inference-transparent
+/// (cf. [`crate::cata::pair_owned`] for the pattern's rationale). `T`
+/// (the input type) is usually inferred from the machine's use; annotate
+/// `readout::<Token, _, _>(…)` when the accumulator absorbs at several
+/// types.
+pub fn readout<T, V, F>(acc: V, out: F) -> Readout<T, V, F> {
+    Readout {
+        acc,
+        out,
+        _in: core::marker::PhantomData,
+    }
+}
+
+impl<T, V: core::fmt::Debug, F> core::fmt::Debug for Readout<T, V, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Readout")
+            .field("acc", &self.acc)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T, V, F> Readout<T, V, F> {
+    /// Borrow the accumulator.
+    pub fn get(&self) -> &V {
+        &self.acc
+    }
+    /// Take the accumulator back out (std's `into_inner` convention) —
+    /// the readout is dropped, which is [`Driven`]'s forgetting made
+    /// literal.
+    pub fn into_inner(self) -> V {
+        self.acc
+    }
+}
+
+impl<T, B, V, F> Machine for Readout<T, V, F>
+where
+    V: crate::base::Absorb<T>,
+    F: Fn(&V) -> B,
+{
+    type In = T;
+    type Out = B;
+    fn out(&self) -> B {
+        (self.out)(&self.acc)
+    }
+    fn update(&mut self, i: T) {
+        self.acc.absorb(i);
+    }
+}
+
+/// Lazy running-readout iterator for [`Machine::scan`]. Yields the
+/// initial readout first, then one readout per consumed input — length
+/// `n + 1` over an `n`-item history. Borrows the machine (`&mut`), so
+/// the machine remains usable, holding its final state, after the scan
+/// is dropped or exhausted.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+#[derive(Debug)]
+pub struct Scan<'m, M, I> {
+    m: &'m mut M,
+    input: I,
+    primed: bool,
+}
+
+impl<M: Machine, I: Iterator<Item = M::In>> Iterator for Scan<'_, M, I> {
+    type Item = M::Out;
+    fn next(&mut self) -> Option<M::Out> {
+        if !self.primed {
+            self.primed = true;
+            return Some(self.m.out());
+        }
+        let i = self.input.next()?;
+        self.m.update(i);
+        Some(self.m.out())
+    }
+}
+
 /// `Pipe(a,Pipe(b,c))` define literally the same update sequence.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
@@ -670,12 +803,12 @@ pub fn run_history<M: Machine>(m: &mut M, history: impl IntoIterator<Item = M::I
 }
 
 /// A machine as a pure sink: step and discard the output (weakening).
-/// Implements the kernel's [`crate::base::Absorb`], drawing the seam from
+/// Implements the kernel's [`crate::base::Absorb`], drawing the boundary from
 /// the machine side: an `Absorb` is a machine that keeps its counsel; a
 /// machine is an `Absorb` plus a readout.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 pub struct Driven<M>(
-    /// Public on purpose (the carrier exception, cf.
+    /// The public field is the interface (the carrier exception, cf.
     /// [`crate::base::Pair`]): after driving, the wrapped machine *is*
     /// the result — `driven.0.out()` is how you read it back.
     pub M,
@@ -940,7 +1073,7 @@ impl<M: Transducer, N: Transducer<Out = M::Out>> Transducer for ConsumeResultTra
 /// This subsumes contravariant `Divisible`'s `divide` (take output-less
 /// sinks) as a special case, and is the affine repricing of the
 /// contravariant applicative: sums are free ([`ConsumeResultTransducer`]), decompositions
-/// are free (here), and only the genuine diagonal — both machines wanting
+/// are free (here), and only the true diagonal — both machines wanting
 /// the *whole* value, [`DuplicateToTransducer`] — pays the [`crate::base::Unaliased`]
 /// bound.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
@@ -995,7 +1128,7 @@ where
 pub struct DuplicateToMachine<A, B>(A, B);
 
 impl<A, B> DuplicateToMachine<A, B> {
-    /// Cross-module door for sibling wrappers ([`crate::weighted`]);
+    /// Cross-module constructor for sibling wrappers ([`crate::weighted`]);
     /// public construction is [`Machine::duplicate_to`].
     pub(crate) const fn new(a: A, b: B) -> Self {
         DuplicateToMachine(a, b)
@@ -1031,8 +1164,8 @@ where
 /// The machine-level [`crate::base::DuplicateTo`]: shared-input fanout of two
 /// machines — the Applicative zip of transducers (`Mealy`'s Applicative in
 /// Kmett's `machines`; his `Monad` instance one rung up was *removed* there
-/// as law-inconsistent, so the structure stops here on purpose). Both
-/// machines see the whole input, so this is the genuine diagonal and pays
+/// as law-inconsistent, so the structure stops here by design). Both
+/// machines see the entire input, so this is a true diagonal and pays
 /// the [`crate::base::Unaliased`] bound.
 #[must_use = "a machine does nothing until stepped; an unstepped machine is usually a dropped computation"]
 #[derive(Debug, Clone, Copy, Default)]
@@ -1198,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn history_denotation_and_seam() {
+    fn history_denotation_and_kernel_bridge() {
         // denotational equality: two wirings of the same pipeline agree on
         // histories (the corepresentable law harness in action):
         let mut left = Pipe(
@@ -1220,7 +1353,7 @@ mod tests {
             run_history(&mut right, [1u64, 2, 3])
         );
 
-        // seam: a machine as a sink for the kernel's Absorb
+        // the bridge: a machine as a sink for the kernel's Absorb
         use crate::base::Absorb;
         let mut sink = Driven(Counter(0));
         for i in [5u64, 7] {
@@ -1283,6 +1416,53 @@ mod tests {
     }
 
     #[test]
+    fn readout_fold_is_a_machine_and_driven_forgets_only_the_readout() {
+        use crate::base::Absorb;
+        // the readout grade: a Vec-fold with a length readout attached
+        let mut m =
+            readout::<u64, _, _>(alloc::vec::Vec::new(), |v: &alloc::vec::Vec<u64>| v.len());
+        // streaming readout with no extra code — scan on a fold:
+        let lens: alloc::vec::Vec<usize> = m.scan([7u64, 7, 7]).collect();
+        assert_eq!(lens, alloc::vec![0, 1, 2, 3]);
+        // the retraction, concretely (FoldMooreRetract.agda): Driven
+        // forgets exactly the readout; the dynamics survive intact.
+        let mut sink = Driven(readout::<u64, _, _>(
+            alloc::vec::Vec::new(),
+            |v: &alloc::vec::Vec<u64>| v.len(),
+        ));
+        sink.accumulate([1u64, 2, 3]);
+        let recovered = sink.0.into_inner();
+        assert_eq!(recovered, alloc::vec![1u64, 2, 3]); // == the plain fold
+    }
+
+    #[test]
+    fn scan_last_agrees_with_run_history() {
+        // the Rust mirror of `scan-last` (MooreComonad.agda): the final
+        // scanned readout is the run_history readout, and the length is
+        // history + 1 (initial readout included, as in the model).
+        struct Tot(u64);
+        impl Machine for Tot {
+            type In = u64;
+            type Out = u64;
+            fn out(&self) -> u64 {
+                self.0
+            }
+            fn update(&mut self, i: u64) {
+                self.0 += i;
+            }
+        }
+        let h = [3u64, 1, 4, 1, 5];
+        let scanned: alloc::vec::Vec<u64> = Tot(0).scan(h).collect();
+        assert_eq!(scanned, alloc::vec![0, 3, 4, 8, 9, 14]);
+        assert_eq!(scanned.len(), h.len() + 1);
+        assert_eq!(*scanned.last().unwrap(), Tot(0).run_history(h));
+        // and the machine survives its scan, holding the final state:
+        let mut m = Tot(0);
+        m.scan(h).for_each(drop);
+        assert_eq!(m.out(), 14);
+    }
+
+    #[test]
     fn table_machine_new_makes_malformed_tables_unrepresentable() {
         let acc = [false, true];
         assert!(TableMachine::new(&[1, 0, 1, 0], &acc, 2).is_some());
@@ -1324,7 +1504,7 @@ mod tests {
         );
         assert_eq!(sp.step((3, "x".into())), (3, 1));
 
-        // shared-input fanout: the genuine diagonal, Unaliased-priced
+        // shared-input fanout: the true diagonal, gated on Unaliased
         let mut b = DuplicateToTransducer(Counter(0), Counter(1000));
         assert_eq!(b.step(5), (5, 1005));
     }

@@ -36,7 +36,7 @@ use alloc::vec::Vec;
 /// Equality in these laws is **value equality** (`==`), not pointer
 /// identity; see [`crate::data::map_in_place`] for where the crate uses
 /// pointer identity instead, and note that the two notions are kept
-/// deliberately distinct.
+/// distinct.
 ///
 /// # Foreclosed: per-type impls instead of the blanket
 /// An earlier revision dropped the blanket to enable custom structural
@@ -46,9 +46,9 @@ use alloc::vec::Vec;
 /// laws force each half of a lawful `dup` to equal the original — so the
 /// population of lawful comonoids that are not lawful clones is
 /// approximately empty. The blanket buys zero per-signature friction and
-/// zero orphan-wall coupling; what it genuinely forecloses (excluding
+/// zero orphan-wall coupling; what it does foreclose (excluding
 /// *entangled* duplication like `Rc`) is recovered by [`Unaliased`].
-/// Note the door swings one way: the blanket can never be removed
+/// Note this is one-way: the blanket can never be removed
 /// (semver), and structural custom-comonoid impls can never be added
 /// beside it. Priced and accepted.
 ///
@@ -95,6 +95,17 @@ impl<T: Clone> Comonoid for T {
 /// # Law
 /// After `let (a, b) = x.dup()`, no operation on `a` (including through
 /// interior mutability) changes any observation of `b`, and vice versa.
+///
+/// Two witnesses pin this law from both sides. That a lawful copy, when
+/// it exists, can only be the plain diagonal — copyability is a
+/// *property* of the type, never a design choice — is mechanized
+/// (`dup-unique` in `Comonoid.agda`: the counit laws force the
+/// diagonal). That `Copy` does **not** imply the law — the reason this
+/// trait exists instead of a `Copy` bound — is an operational fact about
+/// Rust, witnessed in Rust: the test
+/// `copy_diagonal_on_shared_cell_breaks_the_independence_law` duplicates
+/// a `&Cell<_>` (which is `Copy`), mutates through one half, and
+/// observes the change through the other.
 ///
 /// # Safety and mechanism (foreclosed alternatives)
 /// * **`unsafe trait` (Send/Sync-style)** — rejected: violating `Unaliased`
@@ -190,7 +201,7 @@ impl<A: Unaliased + Clone> Unaliased for alloc::collections::VecDeque<A> {}
 // * Uniform boxed hom-set (`Box<dyn Fun>` behind a GAT) — the generic
 //   tower's cost is boxing at every `arr`; pruned as dead weight once the
 //   monoidal presentation removed its last client. Boxing may return as
-//   an explicit opt-in module, honestly priced (it is also exactly where
+//   an explicit opt-in module, with its costs stated (it is also where
 //   ArrowApply/Monad power lives: closures as *inhabitants*).
 // * RPITIT homs — compile and compose (witnessed), but are unnameable
 //   (E0562: cannot be stored in struct fields on stable) and leak auto
@@ -203,7 +214,7 @@ impl<A: Unaliased + Clone> Unaliased for alloc::collections::VecDeque<A> {}
 //   above is exactly the cost of losing the name). Representation is a
 //   *separate* decision, and the `Iterator` adapter precedent cuts the
 //   other way on it: `Map`'s fields are `pub(crate)`, its constructor
-//   `pub(in crate::iter)`, and `.map()` is the only public door.
+//   `pub(in crate::iter)`, and `.map()` the only public constructor.
 //   Followed here: nameable types, private fields, trait methods as the
 //   sole constructors. Two decisions, two answers, one precedent.
 
@@ -294,7 +305,7 @@ pub trait Piece<A> {
     }
     /// The **monoidal tensor** `self ⊗ g` — build [`Alongside`]. Also a
     /// free function ([`alongside`]); the `std::iter::zip` precedent —
-    /// both doors, same combinator.
+    /// both spellings build the same combinator.
     fn alongside<C, G: Piece<C>>(self, g: G) -> Alongside<Self, G>
     where
         Self: Sized,
@@ -302,7 +313,8 @@ pub trait Piece<A> {
         Alongside(self, g)
     }
     /// The **copairing** `[self, g]` — build [`ConsumeResult`]. Also a
-    /// free function ([`consume_result`]); both doors, same combinator.
+    /// free function ([`consume_result`]); both spellings build the same
+    /// combinator.
     fn consume_result<B, G: Piece<B, Out = Self::Out>>(self, g: G) -> ConsumeResult<Self, G>
     where
         Self: Sized,
@@ -315,7 +327,7 @@ pub trait Piece<A> {
 /// (separate inputs; see its docs). Ships as both this free function and
 /// the [`Piece::alongside`] method — the `std::iter::zip` precedent: for a
 /// symmetric operation the free form reads without privileging either arm,
-/// the method form chains. Same combinator through either door.
+/// the method form chains. Either spelling builds the same combinator.
 /// (Foreclosed rationale: "free because the input type is a pair, not
 /// `self`'s input" — [`MapOk`] is a method with exactly that property,
 /// so the criterion never discriminated; demand and symmetry are the
@@ -325,8 +337,9 @@ pub fn alongside<A, C, F: Piece<A>, G: Piece<C>>(f: F, g: G) -> Alongside<F, G> 
 }
 
 /// **Copairing** `[f, g]` — build [`ConsumeResult`]. Free elimination of a
-/// `Result` (see its docs). Both doors, like [`alongside`]: this free form
-/// for the symmetric reading, [`Piece::consume_result`] for chains.
+/// `Result` (see its docs). As with [`alongside`], both spellings exist:
+/// this free form for the symmetric reading, [`Piece::consume_result`]
+/// for chains.
 pub fn consume_result<A, B, C, F: Piece<A, Out = C>, G: Piece<B, Out = C>>(
     f: F,
     g: G,
@@ -387,8 +400,8 @@ impl<A> Piece<A> for Id {
 /// Associativity and the [`Id`] identity laws are definitional (the
 /// free-category laws).
 ///
-/// Representation is private; the trait surface is the only door — and
-/// that claim carries its own compile-time witness:
+/// Representation is private; construction goes through the trait
+/// methods alone — and that claim carries its own compile-time witness:
 /// ```compile_fail,E0616
 /// use affine_cat::base::{Embed, Piece};
 /// let l = Embed(|x: i32| x + 1).link(Embed(|x: i32| x * 2));
@@ -409,9 +422,8 @@ impl<A, F: Piece<A>, G: Piece<F::Out>> Piece<A> for Link<F, G> {
 ///
 /// Naming families: [`OnFirst`]/[`OnSecond`] act on tensor (`×`)
 /// components (Strong); [`MapOk`]/[`MapErr`] act on coproduct (`+`) branches
-/// (Choice), and [`Swap`] is the braiding. The distinction is
-/// load-bearing — Strong needs the diagonal for its fanout, Choice never
-/// does.
+/// (Choice), and [`Swap`] is the braiding. The distinction matters:
+/// Strong needs the diagonal for its fanout, Choice never does.
 ///
 /// Bound note: this combinator needs only weakening and exchange, so
 /// **no duplication bound at all** — the bounds on each combinator are
@@ -487,7 +499,7 @@ impl<A, E, F: Piece<A>> Piece<Result<A, E>> for MapOk<F> {
 /// short-circuits the shared error channel. This is [`Link`] lifted to
 /// fallible arrows: where `Link` composes `A -> B` with `B -> C`, `LinkOk`
 /// composes `A -> Result<B, E>` with `B -> Result<C, E>`, doing the unwrap
-/// and Err-bypass. Fixed to `Result` on purpose — like std's
+/// and Err-bypass. Fixed to `Result` — like std's
 /// `Result::and_then` it needs no monad abstraction, so it dodges the no-HKT
 /// wall. The dual, chaining on the `Err` arm, is [`LinkErr`] (std `or_else`).
 ///
@@ -673,7 +685,7 @@ impl<A, C, F: Piece<A>, G: Piece<C>> Piece<(A, C)> for Alongside<F, G> {
 /// and simply keeps it (`core::hash::Hasher`'s `write`, and the
 /// `Accumulates` trait of creature_feature, are this shape).
 ///
-/// This is the crate's cross-spine seam: a [`crate::machines::Machine`] is
+/// This is where the spines meet: a [`crate::machines::Machine`] is
 /// an `Absorb` plus a readout; an `Absorb` is a machine that keeps its
 /// counsel. Accordingly the trait lives in the kernel and each spine owns
 /// its instances.
@@ -766,15 +778,15 @@ impl<T> Absorb<T> for Count {
 
 /// Product of algebras: absorb into two accumulators from one stream —
 /// one pass, two outputs (creature_feature's `featurize_x2`, as a lawful
-/// instance). The token is genuinely duplicated, so the [`Comonoid`]
-/// bound sits exactly where the theory puts it.
+/// instance). The token really is duplicated, so the [`Comonoid`]
+/// bound sits where the theory puts it.
 ///
-/// **Fields are public on purpose** — the one deliberate exception to the
+/// **The public fields are intentional** — the one exception to the
 /// private-representation rule. `Absorb` is a *carrier* trait: the
 /// accumulators are the result, and `let Pair(a, b) = acc` is how you
-/// take them home. Opacity is right exactly when the trait's methods are
-/// the whole observation (`Piece::run`, `Machine::out`); for `Absorb`
-/// they are not, so the fields stay open.
+/// take them home. Opacity is right when the trait's methods determine
+/// everything observable (`Piece::run`, `Machine::out`); for `Absorb`
+/// they do not, so the fields stay open.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Pair<A, B>(pub A, pub B);
 impl<T: Comonoid, A: Absorb<T>, B: Absorb<T>> Absorb<T> for Pair<A, B> {
@@ -918,6 +930,27 @@ mod tests {
         // closure pipelines debuggable.
         let p = Embed(|x: i32| x + 1).link(Embed(|x: i32| x * 2));
         assert_eq!(format!("{p:?}"), "Link(Embed { .. }, Embed { .. })");
+    }
+
+    #[test]
+    fn copy_diagonal_on_shared_cell_breaks_the_independence_law() {
+        // `&Cell<i32>` is `Copy`, so the diagonal exists *syntactically*:
+        use core::cell::Cell;
+        let cell = Cell::new(0);
+        let x: &Cell<i32> = &cell;
+        let (a, b) = (x, x); // the bitwise Δ that `Copy` licenses
+                             // ...but the halves are not independent: a mutation through `a`
+                             // is observed through `b`. This is the independence law failing
+                             // operationally — the exact content `Unaliased` excludes and a
+                             // `Copy` bound would readmit. (The complementary direction — a
+                             // lawful copy can only be the diagonal — is `dup-unique` in
+                             // `Comonoid.agda`; this half is a fact about Rust's semantics
+                             // and so is witnessed in Rust.)
+        a.set(41);
+        assert_eq!(b.get(), 41); // both names refer to one cell
+                                 // and the entanglement is symmetric:
+        b.set(b.get() + 1);
+        assert_eq!(a.get(), 42);
     }
 
     #[test]

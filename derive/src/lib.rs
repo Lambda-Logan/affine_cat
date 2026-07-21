@@ -1082,7 +1082,7 @@ fn map_expr2(
 /// bracketing (balanced on normal exit and panic — the AbsorbEnv
 /// discipline); otherwise plain `fold2` over `&Env`.
 ///
-/// v1 limits, deliberate: exactly two sorts; tuple/unit variants;
+/// v1 limits: exactly two sorts; tuple/unit variants;
 /// borrowed drivers only (owned mutual waits for a consumer);
 /// no absorption (the Out1/Out2 bubble type is undesigned until a
 /// consumer's error shape picks it); frame CONTENT from sibling
